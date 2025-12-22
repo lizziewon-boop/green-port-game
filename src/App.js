@@ -152,19 +152,20 @@ const AnimatedNumber = ({ value, decimals = 1, suffix = '', prefix = '', duratio
 const ShipAnimation = ({ change, delay = 0 }) => {
   const isPositive = change >= 0;
   const absChange = Math.abs(change);
-  const shipCount = Math.min(5, Math.max(1, Math.ceil(absChange / 8)));
+  // 최대 4개, 변화량에 비례
+  const shipCount = Math.min(4, Math.max(1, Math.ceil(absChange / 15)));
   
   return (
     <div style={{ 
       display: 'flex', 
       alignItems: 'center', 
-      gap: '4px'
+      gap: '2px'
     }}>
       {[...Array(shipCount)].map((_, i) => (
         <span 
           key={i} 
           style={{ 
-            fontSize: '20px',
+            fontSize: '16px',
             display: 'inline-block',
             animation: isPositive 
               ? `shipFadeIn 1.2s ease-out ${delay + i * 0.2}s both`
@@ -175,9 +176,9 @@ const ShipAnimation = ({ change, delay = 0 }) => {
         </span>
       ))}
       <span style={{ 
-        marginLeft: '8px',
+        marginLeft: '6px',
         fontWeight: 'bold',
-        fontSize: '18px',
+        fontSize: '15px',
         color: isPositive ? '#4ade80' : '#f87171'
       }}>
         {isPositive ? '+' : ''}{change}척
@@ -1467,40 +1468,42 @@ export default function GreenPortStrategy() {
           <div style={{ 
             backgroundColor: 'rgba(234,179,8,0.25)', 
             borderRadius: '12px', 
-            padding: '16px',
+            padding: '14px',
             marginBottom: '12px',
             border: '2px solid rgba(234,179,8,0.5)',
             animation: getKoreaAnimation()
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '36px' }}>🇰🇷</span>
+                <span style={{ fontSize: '32px' }}>🇰🇷</span>
                 <div>
-                  <div style={{ fontWeight: 'bold', color: '#eab308', fontSize: '18px' }}>한국</div>
-                  <div style={{ fontSize: '14px', color: '#94a3b8' }}>
+                  <div style={{ fontWeight: 'bold', color: '#eab308', fontSize: '16px' }}>한국</div>
+                  <div style={{ fontSize: '13px', color: '#94a3b8' }}>
                     {getShipCount(turnResult.prevShare, prevTotalShips)}척 → {getShipCount(turnResult.newShare, totalShips)}척
                   </div>
                 </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
+              <div>
                 {/* 선박 페이드 애니메이션 - 1.0초 후 */}
                 <ShipAnimation change={koreaShipChange} delay={1.0} />
               </div>
             </div>
           </div>
           
-          {/* 다른 항만 선박 변화 - 1.5초, 1.8초, 2.1초 순차 */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+          {/* 다른 항만 선박 변화 - 모바일 대응 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {['singapore', 'shanghai', 'rotterdam'].map((key, index) => {
               const shipChange = getShipChange(key);
               return (
                 <div key={key} style={{ 
                   backgroundColor: '#374151', 
                   borderRadius: '10px', 
-                  padding: '12px',
-                  textAlign: 'center'
+                  padding: '10px 14px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
                 }}>
-                  <div style={{ fontSize: '14px', color: PORT_COLORS[key], marginBottom: '6px', fontWeight: 'bold' }}>
+                  <div style={{ fontSize: '14px', color: PORT_COLORS[key], fontWeight: 'bold' }}>
                     {INITIAL_PORTS[key].flag} {INITIAL_PORTS[key].name}
                   </div>
                   <ShipAnimation change={shipChange} delay={1.5 + index * 0.3} />
