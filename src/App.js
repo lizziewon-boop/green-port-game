@@ -1,1775 +1,2244 @@
-import React, { useState, useEffect, useRef } from 'react';
+/** GREEN PORT v14 — mobile refinement, standalone App.js.
+ * Default export: GreenPortStrategy. React 18+ required.
+ * Replace src/App.js; no extra CSS or image files required.
+ * Game rules and saved campaigns remain compatible with v14.
+ * Research-informed structure; numeric parameters are game assumptions, not exact paper replication.
+ */
 
-// CSS 애니메이션 스타일 - 더 크고 눈에 띄게
-const animationStyles = `
-  @keyframes slideInFromRight {
-    from { transform: translateX(150px); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
+// .build/single-entry.jsx
+import React5, { useEffect as useEffect4, useLayoutEffect } from "react";
+
+// src/App.jsx
+import React4, { useEffect as useEffect3, useId as useId3, useMemo as useMemo3, useRef as useRef3, useState as useState3 } from "react";
+
+// src/model.mjs
+var MODEL_VERSION = "11.0.0";
+var FUELS = [
+  { id: "methanol", label: "메탄올", description: "현재 수요와 기존 운영기반을 활용하는 연료 사업" },
+  { id: "ammonia", label: "암모니아", description: "별도 설비와 운영 준비가 필요한 전환 사업" }
+];
+var SCENARIOS = [
+  { id: "window", label: "기항 시간의 벽", description: "공급 여력은 있지만 작업을 병행하지 못해 고객을 놓칩니다." },
+  { id: "supply", label: "공급능력의 벽", description: "운영 준비는 갖췄지만 공급자산과 처리 여력이 부족합니다." },
+  { id: "transition", label: "연료 전환의 갈림길", description: "기존 서비스를 유지하며 다른 연료와 공급 경로를 준비합니다." }
+];
+var DIFFICULTIES = [
+  { id: "easy", label: "EASY", description: "초기 재원과 연간 정책예산이 넉넉하며 경쟁 투자가 느립니다." },
+  { id: "normal", label: "NORMAL", description: "예산·준비기간·경쟁자의 투자를 함께 관리합니다." },
+  { id: "hard", label: "HARD", description: "재정 여유가 작고 경쟁자가 적극적으로 투자합니다. 시장 전망은 난이도와 별개입니다." }
+];
+var TRANSITIONS = [
+  { id: "balanced", label: "점진적 전환", description: "메탄올 시장이 성장하는 동안 암모니아 비중이 점진적으로 늘어납니다." },
+  { id: "ammonia_fast", label: "암모니아 전환 가속", description: "미래 수요가 빠르게 바뀌므로 준비 시점이 중요합니다." },
+  { id: "methanol_long", label: "메탄올 수요 지속", description: "현재 연료의 수요가 오래 유지되어 성급한 전환의 기회비용이 커집니다." }
+];
+var RESEARCH_NOTES = [
+  { id: "logms", label: "LOGMS · 서비스와 선박 선택", description: "대기·작업 병행·공급 준비도가 항만 선택과 급유 유보에 연결되는 구조를 반영했습니다. +7.5/+21.6/+18.2%p를 고정 투자효과로 사용하지 않습니다.", source: "Service Configuration Design for Green Bunkering Capture at Transshipment Hubs, §3–5", status: "구조 반영 · 계수는 게임 설정" },
+  { id: "lng", label: "LNG · 공통 역량과 연료별 준비", description: "운영 조정·문서 기반은 함께 활용하되 설비·운영 준비·SIMOPS는 연료별로 관리합니다. 0.9/0.4/0.3을 비용 절감률이나 안전인증 승계율로 사용하지 않습니다.", source: "LNG Investment as Springboard or Stranded Asset?, §2–5", status: "구조 반영 · 원 CTS 정규화 확인 필요" },
+  { id: "trust", label: "Trust · 거래 조건", description: "계량·전자증빙·상호인정은 유효가격의 거래비용에만 반영합니다. 상대 수요 증가율을 포획률 %p에 더하지 않습니다.", source: "Trust Infrastructure as Competitive Advantage, §2.4–3.3", status: "구조 반영 · 표 6의 요코하마 값 확인 필요" },
+  { id: "assumptions", label: "이번 버전의 수치와 범위", description: "사업비·준비기간·수요경로·선택계수·정책예산·실적당 기여이익·계약조건은 교육용 게임 설정입니다. 선박별 항차 추적이나 원논문의 정확 재현, 실제 항만의 수요·수익 예측을 제공하지 않습니다.", status: "게임 가정" },
+  { id: "pending", label: "원자료에서 확인할 항목", description: "LNG 원고의 인쇄된 CTS 식·표 2로 계산한 상한 1.85와 결과표 2.63/2.85 사이의 정규화, Trust의 0.4996×1.15와 표 6의 0.69% 차이는 원 계산표 확인 대상으로 남겼습니다. 해당 결과값은 엔진에 복사하지 않았습니다.", status: "원 연구 입력·코드 확인 전" },
+  { id: "allocation", label: "수행량과 유보의 처리", description: "같은 연료 시장 안에서 계약 물량을 먼저 배정하고 나머지를 항만·유보에 배분합니다. 처리 상한을 넘은 수요는 유보로 돌립니다. 경쟁항으로 재배정하는 완전한 항차 최적화는 하지 않습니다.", status: "명시적 단순화" }
+];
+var MODEL_CONFIG = Object.freeze({
+  provenance: "GAME_ASSUMPTION",
+  firstYear: 2026,
+  lastYear: 2040,
+  maxActions: 2,
+  priceUnit: "normalized_index_100",
+  volumeUnit: "expected_bunkering_opportunities_per_year",
+  moneyUnit: "KRW_100_million",
+  baseMarket: 1e3,
+  annualMarketGrowth: 0.075,
+  serviceContribution: 0.42,
+  grossServiceRevenue: 1,
+  choice: { price: 0.04, waiting: 0.55, feasibility: 2.6, readiness: 1.25, deferBase: 0.65, deferTightness: 1.05, deferBuffer: 0.8 },
+  operations: { simopsBoost: 2.6, schedulePenalty: 2, interaction: 0.8, waitingBase: 0.6, waitingScale: 1.8, congestionPower: 1.8, congestionCap: 0.97 },
+  finance: { easy: { cash: 450, grant: 90, rivalGrant: 62 }, normal: { cash: 360, grant: 65, rivalGrant: 78 }, hard: { cash: 300, grant: 45, rivalGrant: 95 } }
+});
+var PORT_IDS = ["korea", "singapore", "rotterdam", "shanghai"];
+var FUEL_IDS = FUELS.map((f) => f.id);
+var FUEL_LABEL = Object.fromEntries(FUELS.map((f) => [f.id, f.label]));
+var clone = (value) => JSON.parse(JSON.stringify(value));
+var clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+var roundMoney = (value) => Math.round(value * 100) / 100;
+var sigmoid = (value) => 1 / (1 + Math.exp(-value));
+var sum = (values) => values.reduce((a, b) => a + b, 0);
+var hasId = (items, id) => items.some((item) => item.id === id);
+var labelFor = (items, id) => items.find((item) => item.id === id)?.label || id;
+function hash(seed, key) {
+  let h = Number(seed) >>> 0 ^ 2166136261;
+  for (const char of String(key)) {
+    h ^= char.charCodeAt(0);
+    h = Math.imul(h, 16777619);
   }
-  @keyframes slideInFromLeft {
-    from { transform: translateX(-150px); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-  }
-  @keyframes slideInFromTop {
-    from { transform: translateY(-50px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
-  }
-  @keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.9); }
-    to { opacity: 1; transform: scale(1); }
-  }
-  @keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.15); }
-  }
-  @keyframes shipFadeIn {
-    0% { opacity: 0; transform: scale(0.5); }
-    50% { opacity: 0.5; transform: scale(1.1); }
-    100% { opacity: 1; transform: scale(1); }
-  }
-  @keyframes shipFadeOut {
-    0% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(0.9); }
-    100% { opacity: 0.2; transform: scale(0.7); }
-  }
-  @keyframes shakeSmall {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-3px); }
-    75% { transform: translateX(3px); }
-  }
-  @keyframes shakeMedium {
-    0%, 100% { transform: translateX(0) rotate(0deg); }
-    25% { transform: translateX(-8px) rotate(-1deg); }
-    75% { transform: translateX(8px) rotate(1deg); }
-  }
-  @keyframes shakeLarge {
-    0%, 100% { transform: translateX(0) rotate(0deg); }
-    10%, 30%, 50%, 70%, 90% { transform: translateX(-15px) rotate(-2deg); }
-    20%, 40%, 60%, 80% { transform: translateX(15px) rotate(2deg); }
-  }
-  @keyframes glowSmall {
-    0%, 100% { box-shadow: 0 0 5px rgba(234,179,8,0.3); }
-    50% { box-shadow: 0 0 15px rgba(234,179,8,0.6); }
-  }
-  @keyframes glowMedium {
-    0%, 100% { box-shadow: 0 0 10px rgba(234,179,8,0.4); }
-    50% { box-shadow: 0 0 30px rgba(234,179,8,0.8); }
-  }
-  @keyframes glowLarge {
-    0%, 100% { box-shadow: 0 0 15px rgba(234,179,8,0.5); }
-    50% { box-shadow: 0 0 50px rgba(234,179,8,1), 0 0 70px rgba(234,179,8,0.5); }
-  }
-  @keyframes zoomPulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.3); }
-  }
-  @keyframes dangerPulse {
-    0%, 100% { transform: scale(1); filter: brightness(1); }
-    50% { transform: scale(1.2); filter: brightness(1.5); }
-  }
-  @keyframes newsAlert {
-    0% { transform: translateX(200px) rotate(5deg); opacity: 0; }
-    60% { transform: translateX(-20px) rotate(-2deg); opacity: 1; }
-    80% { transform: translateX(10px) rotate(1deg); }
-    100% { transform: translateX(0) rotate(0deg); opacity: 1; }
-  }
-  @keyframes bounceIn {
-    0% { transform: scale(0.3); opacity: 0; }
-    40% { transform: scale(1.2); }
-    60% { transform: scale(0.9); }
-    80% { transform: scale(1.05); }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  @keyframes flyIn {
-    0% { transform: translateX(-100vw) rotate(-20deg); }
-    70% { transform: translateX(20px) rotate(5deg); }
-    100% { transform: translateX(0) rotate(0deg); }
-  }
-  @keyframes numberPop {
-    0% { transform: scale(0); opacity: 0; }
-    50% { transform: scale(1.5); }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  @keyframes successFlash {
-    0% { background-color: rgba(34,197,94,0); }
-    30% { background-color: rgba(34,197,94,0.5); }
-    100% { background-color: rgba(34,197,94,0); }
-  }
-  @keyframes dangerFlash {
-    0% { background-color: rgba(239,68,68,0); }
-    30% { background-color: rgba(239,68,68,0.5); }
-    100% { background-color: rgba(239,68,68,0); }
-  }
-`;
-
-// 스타일 태그 삽입 컴포넌트
-const StyleInjector = () => {
-  useEffect(() => {
-    const styleEl = document.createElement('style');
-    styleEl.textContent = animationStyles;
-    document.head.appendChild(styleEl);
-    return () => document.head.removeChild(styleEl);
-  }, []);
-  return null;
-};
-
-// 카운트업 애니메이션 훅
-const useCountUp = (end, duration = 1500, start = 0) => {
-  const [count, setCount] = useState(start);
-  const countRef = useRef(start);
-  
-  useEffect(() => {
-    const startTime = Date.now();
-    const startValue = countRef.current;
-    
-    const animate = () => {
-      const now = Date.now();
-      const progress = Math.min((now - startTime) / duration, 1);
-      const easeOut = 1 - Math.pow(1 - progress, 3);
-      const current = startValue + (end - startValue) * easeOut;
-      
-      setCount(current);
-      countRef.current = current;
-      
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      }
-    };
-    
-    requestAnimationFrame(animate);
-  }, [end, duration]);
-  
-  return count;
-};
-
-// 애니메이션 숫자 컴포넌트
-const AnimatedNumber = ({ value, decimals = 1, suffix = '', prefix = '', duration = 1500 }) => {
-  const animatedValue = useCountUp(value, duration);
-  return <span style={{ display: 'inline-block', animation: 'numberPop 0.5s ease-out' }}>{prefix}{animatedValue.toFixed(decimals)}{suffix}</span>;
-};
-
-// 선박 이동 애니메이션 컴포넌트 - 증가: 흐렸다가 진해짐, 감소: 진했다가 흐려짐
-const ShipAnimation = ({ change, delay = 0 }) => {
-  const isPositive = change >= 0;
-  const absChange = Math.abs(change);
-  // 최대 4개, 변화량에 비례
-  const shipCount = Math.min(4, Math.max(1, Math.ceil(absChange / 15)));
-  
-  return (
-    <div style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      gap: '2px'
-    }}>
-      {[...Array(shipCount)].map((_, i) => (
-        <span 
-          key={i} 
-          style={{ 
-            fontSize: '16px',
-            display: 'inline-block',
-            animation: isPositive 
-              ? `shipFadeIn 1.2s ease-out ${delay + i * 0.2}s both`
-              : `shipFadeOut 1.2s ease-out ${delay + i * 0.2}s both`
-          }}
-        >
-          🚢
-        </span>
-      ))}
-      <span style={{ 
-        marginLeft: '6px',
-        fontWeight: 'bold',
-        fontSize: '15px',
-        color: isPositive ? '#4ade80' : '#f87171'
-      }}>
-        {isPositive ? '+' : ''}{change}척
-      </span>
-    </div>
-  );
-};
-
-const INITIAL_PORTS = {
-  singapore: { name: '싱가포르', flag: '🇸🇬', code: 'SG', ascBase: 0, methanol: 0.3, ammonia: 0.2, budget: 500, personality: 'aggressive' },
-  rotterdam: { name: '로테르담', flag: '🇳🇱', code: 'NL', ascBase: -0.76, methanol: 0.3, ammonia: 0.15, budget: 400, personality: 'tech' },
-  korea: { name: '한국', flag: '🇰🇷', code: 'KR', ascBase: -0.96, methanol: 0.1, ammonia: 0, budget: 300, personality: 'player' },
-  shanghai: { name: '상하이', flag: '🇨🇳', code: 'CN', ascBase: -1.28, methanol: 0.05, ammonia: 0, budget: 350, personality: 'price' }
-};
-
-const PORT_COLORS = {
-  korea: '#eab308',
-  singapore: '#22c55e', 
-  rotterdam: '#f97316',
-  shanghai: '#ef4444'
-};
-
-const EVENTS = {
-  A: [
-    { year: 2026, title: "FuelEU 시행 유예 논의", effect: "메탄올 수요 +2%", mood: 'neutral' },
-    { year: 2027, title: "EU ETS 해운 적용 축소", effect: "전환 수요 +3%", mood: 'neutral' },
-    { year: 2028, title: "기술 개발 지연", effect: "변화 없음", mood: 'warning' },
-    { year: 2029, title: "글로벌 경기 침체", effect: "전체 수요 -5%", mood: 'danger' },
-    { year: 2030, title: "IMO 목표 완화 논의", effect: "전환 수요 +2%", mood: 'neutral' },
-    { year: 2031, title: "메탄올 가격 급등", effect: "메탄올 수요 -5%", mood: 'danger' },
-    { year: 2032, title: "암모니아 상용화 지연", effect: "변화 없음", mood: 'warning' },
-    { year: 2033, title: "기존 연료 가격 하락", effect: "전환 수요 -3%", mood: 'warning' },
-    { year: 2034, title: "싱가포르 투자 축소", effect: "경쟁 완화", mood: 'good', competitorBoost: { singapore: 0.05 } },
-    { year: 2035, title: "EU 규제 2단계 유예", effect: "전환 수요 +3%", mood: 'neutral' },
-    { year: 2036, title: "암모니아 기술 점진 발전", effect: "암모니아 수요 +5%", mood: 'good' },
-    { year: 2037, title: "시장 정체기", effect: "변화 없음", mood: 'neutral' },
-    { year: 2038, title: "IMO 2040 규제 완화", effect: "전환 수요 +3%", mood: 'neutral' },
-    { year: 2039, title: "점진적 회복세", effect: "전환 수요 +3%", mood: 'good' },
-    { year: 2040, title: "IMO 2040 (완화된 목표)", effect: "최종 평가", mood: 'neutral' }
-  ],
-  B: [
-    { year: 2026, title: "EU FuelEU 본격 시행", effect: "메탄올 수요 +5%", mood: 'good' },
-    { year: 2027, title: "EU ETS 해운 확대 적용", effect: "전환 수요 +8%", mood: 'good' },
-    { year: 2028, title: "싱가포르 암모니아 상용화", effect: "싱가포르 경쟁력 ↑", mood: 'danger', competitorBoost: { singapore: 0.15 } },
-    { year: 2029, title: "메탄올 선박 100척 돌파", effect: "메탄올 수요 +10%", mood: 'good' },
-    { year: 2030, title: "IMO 중간 목표 점검", effect: "전환 수요 +5%", mood: 'neutral' },
-    { year: 2031, title: "상하이 대규모 투자", effect: "상하이 경쟁력 ↑", mood: 'danger', competitorBoost: { shanghai: 0.2 } },
-    { year: 2032, title: "암모니아 선박 첫 상용 운항", effect: "암모니아 수요 +15%", mood: 'good' },
-    { year: 2033, title: "메탄올 가격 안정화", effect: "메탄올 경쟁력 ↑", mood: 'good', globalBoost: { methanol: 0.05 } },
-    { year: 2034, title: "로테르담 그린메탄올 생산", effect: "로테르담 경쟁력 ↑", mood: 'warning', competitorBoost: { rotterdam: 0.15 } },
-    { year: 2035, title: "EU 규제 2단계 강화", effect: "전환 수요 +10%", mood: 'good' },
-    { year: 2036, title: "암모니아 가격 경쟁력 확보", effect: "암모니아 경쟁력 ↑", mood: 'good', globalBoost: { ammonia: 0.1 } },
-    { year: 2037, title: "싱가포르 허브 확장 완료", effect: "싱가포르 경쟁력 ↑", mood: 'warning', competitorBoost: { singapore: 0.1 } },
-    { year: 2038, title: "IMO 2040 규제 확정", effect: "전환 수요 +10%", mood: 'good' },
-    { year: 2039, title: "글로벌 벙커링 표준화", effect: "시장 안정", mood: 'neutral' },
-    { year: 2040, title: "IMO 2040 목표 시점", effect: "최종 평가", mood: 'neutral' }
-  ],
-  C: [
-    { year: 2026, title: "EU 추가 규제 예고", effect: "메탄올 수요 +10%", mood: 'good' },
-    { year: 2027, title: "탄소세 조기 적용", effect: "전환 수요 +15%", mood: 'good' },
-    { year: 2028, title: "암모니아 기술 돌파", effect: "암모니아 경쟁력 ↑", mood: 'good', globalBoost: { ammonia: 0.1 } },
-    { year: 2029, title: "메탄올 선박 발주 폭증", effect: "메탄올 수요 +15%", mood: 'good' },
-    { year: 2030, title: "IMO 목표 상향 조정", effect: "전환 수요 +10%", mood: 'good' },
-    { year: 2031, title: "상하이 저가 공세", effect: "상하이 경쟁력 ↑↑", mood: 'danger', competitorBoost: { shanghai: 0.25 } },
-    { year: 2032, title: "싱가포르 암모니아 허브 선언", effect: "싱가포르 경쟁력 ↑↑", mood: 'danger', competitorBoost: { singapore: 0.2 } },
-    { year: 2033, title: "그린메탄올 가격 급락", effect: "메탄올 경쟁력 ↑", mood: 'good', globalBoost: { methanol: 0.1 } },
-    { year: 2034, title: "암모니아 선박 대량 발주", effect: "암모니아 수요 +20%", mood: 'good' },
-    { year: 2035, title: "EU 탄소중립 선박 의무화", effect: "전환 수요 +15%", mood: 'good' },
-    { year: 2036, title: "로테르담 암모니아 진출", effect: "로테르담 경쟁력 ↑↑", mood: 'danger', competitorBoost: { rotterdam: 0.2 } },
-    { year: 2037, title: "싱가포르 추가 투자", effect: "싱가포르 경쟁력 ↑", mood: 'warning', competitorBoost: { singapore: 0.15 } },
-    { year: 2038, title: "IMO 2040 초과 달성 전망", effect: "전환 수요 +10%", mood: 'good' },
-    { year: 2039, title: "친환경 연료 완전 주류화", effect: "암모니아 수요 +10%", mood: 'good' },
-    { year: 2040, title: "IMO 2040 (강화된 목표)", effect: "최종 평가", mood: 'neutral' }
-  ]
-};
-
-const SPECIAL_EVENTS = {
-  B: {
-    5: { title: "상하이가 협력을 제안합니다", choices: [
-      { text: "협력 수락 (+점유율 안정, -자율성)", effect: { korea: 0.05, shanghai: 0.05 } },
-      { text: "거절하고 독자 노선", effect: { korea: -0.02 } },
-      { text: "협상으로 유리한 조건 획득", effect: { korea: 0.08, shanghai: 0.02 }, risk: 0.4 }
-    ]},
-    8: { title: "울산 저장시설 화재 발생!", choices: [
-      { text: "긴급 복구 (300억 추가 투자)", effect: { korea: 0 }, cost: 300 },
-      { text: "부산으로 우회 (-효율)", effect: { korea: -0.1 } },
-      { text: "해외 시설 임시 임대", effect: { korea: -0.05 }, cost: 100 }
-    ]},
-    11: { title: "싱가포르가 가격 전쟁을 선포!", choices: [
-      { text: "가격 대응 (-수익)", effect: { korea: 0 }, cost: 200 },
-      { text: "품질/서비스 차별화", effect: { korea: 0.05 } },
-      { text: "틈새시장 집중", effect: { korea: -0.03 } }
-    ]},
-    13: { title: "국내 조선사 대량 수주 성공!", choices: [
-      { text: "협력 MOU 체결", effect: { korea: 0.15 } },
-      { text: "인프라 우선 확충", effect: { korea: 0.1 }, cost: 150 },
-      { text: "기회 활용 보류", effect: { korea: 0.05 } }
-    ]}
-  },
-  C: {
-    5: { title: "상하이 저가 공세 시작!", choices: [
-      { text: "가격전쟁 참전", effect: { korea: -0.05 }, cost: 250 },
-      { text: "품질 프리미엄 전략", effect: { korea: 0.05 } },
-      { text: "정부 지원 요청", effect: { korea: 0.08 }, risk: 0.3 }
-    ]},
-    11: { title: "글로벌 해운사가 러브콜!", choices: [
-      { text: "독점 계약 체결", effect: { korea: 0.2 } },
-      { text: "비독점으로 유연성 확보", effect: { korea: 0.1 } },
-      { text: "협상 지연 (더 좋은 조건)", effect: { korea: 0.15 }, risk: 0.5 }
-    ]},
-    13: { title: "암모니아 기술 혁신!", choices: [
-      { text: "즉시 도입 (선점)", effect: { korea: 0.15 }, cost: 200 },
-      { text: "안정화 후 도입", effect: { korea: 0.08 } },
-      { text: "기존 메탄올 집중", effect: { korea: 0 } }
-    ]}
-  }
-};
-
-const COMPETITOR_REACTIONS = {
-  singapore: [
-    { action: "암모니아 인프라 대폭 확충 선언", emoji: "😤", boost: 0.1 },
-    { action: "가격 인하로 맞대응", emoji: "💢", boost: 0.08 },
-    { action: "아시아 해운사 독점 계약 추진", emoji: "🔥", boost: 0.12 }
-  ],
-  shanghai: [
-    { action: "정부 보조금 투입해 저가 공세", emoji: "💰", boost: 0.1 },
-    { action: "메탄올 생산시설 대규모 증설", emoji: "🏭", boost: 0.08 },
-    { action: "한국 물량 빼앗기 작전 개시", emoji: "⚔️", boost: 0.15 }
-  ],
-  rotterdam: [
-    { action: "그린메탄올 생산 확대", emoji: "🌱", boost: 0.08 },
-    { action: "유럽 규제 선점 전략 강화", emoji: "🇪🇺", boost: 0.1 },
-    { action: "현 전략 유지 (관망)", emoji: "🤔", boost: 0 }
-  ]
-};
-
-const INVEST_COSTS = { '없음': 0, '소': 100, '중': 300, '대': 500 };
-
-const calculateShares = (ports) => {
-  let sumExp = 0;
-  const expValues = {};
-  Object.keys(ports).forEach(key => {
-    const port = ports[key];
-    const totalAsc = port.ascBase + port.methanol + port.ammonia;
-    expValues[key] = Math.exp(totalAsc);
-    sumExp += expValues[key];
-  });
-  const shares = {};
-  Object.keys(ports).forEach(key => {
-    shares[key] = (expValues[key] / sumExp) * 100;
-  });
-  return shares;
-};
-
-// AI 투자 결정 함수
-const getAIInvestment = (port, portKey, shares, scenario) => {
-  const budget = port.budget;
-  const share = shares[portKey];
-  
-  // 성향별 투자 전략
-  let investSize = '중';
-  let investAmount = 300;
-  
-  if (port.personality === 'aggressive') {
-    // 싱가포르: 공격적, 점유율 지키기 위해 적극 투자
-    if (share < 40 && budget >= 500) {
-      investSize = '대';
-      investAmount = 500;
-    } else if (budget >= 300) {
-      investSize = '중';
-      investAmount = 300;
-    } else {
-      investSize = '소';
-      investAmount = 100;
-    }
-  } else if (port.personality === 'tech') {
-    // 로테르담: 기술 중심, 꾸준한 중간 투자
-    if (budget >= 300) {
-      investSize = '중';
-      investAmount = 300;
-    } else {
-      investSize = '소';
-      investAmount = 100;
-    }
-  } else if (port.personality === 'price') {
-    // 상하이: 가격 경쟁, 점유율 낮으면 공격적
-    if (share < 15 && budget >= 500) {
-      investSize = '대';
-      investAmount = 500;
-    } else if (share < 20 && budget >= 300) {
-      investSize = '중';
-      investAmount = 300;
-    } else {
-      investSize = '소';
-      investAmount = 100;
-    }
-  }
-  
-  // 예산 부족 시 하향 조정
-  if (investAmount > budget) {
-    if (budget >= 300) {
-      investSize = '중';
-      investAmount = 300;
-    } else if (budget >= 100) {
-      investSize = '소';
-      investAmount = 100;
-    } else {
-      investSize = null;
-      investAmount = 0;
-    }
-  }
-  
-  return { investSize, investAmount };
-};
-
-// 연간 수익 계산
-const getAnnualRevenue = (share) => {
-  const baseRevenue = 200;
-  const shareBonus = Math.floor(share * 10);
-  return baseRevenue + shareBonus;
-};
-
-export default function GreenPortStrategy() {
-  const [screen, setScreen] = useState('start');
-  const [scenario, setScenario] = useState(null);
-  const [turn, setTurn] = useState(1);
-  const [ports, setPorts] = useState(JSON.parse(JSON.stringify(INITIAL_PORTS)));
-  const [shares, setShares] = useState(calculateShares(INITIAL_PORTS));
-  const [shareHistory, setShareHistory] = useState([calculateShares(INITIAL_PORTS)]);
-  const [prevShares, setPrevShares] = useState(null);
-  const [division, setDivision] = useState('M2');
-  const [fuelRatio, setFuelRatio] = useState(50);
-  const [investSize, setInvestSize] = useState('중');
-  const [turnResult, setTurnResult] = useState(null);
-  const [specialEvent, setSpecialEvent] = useState(null);
-  const [totalInvested, setTotalInvested] = useState(0);
-  const [aiActions, setAiActions] = useState({}); // AI 행동 기록
-  const [bankruptYear, setBankruptYear] = useState(null);
-  
-  // CSS 애니메이션 스타일 삽입 (컴포넌트 마운트 시 한번)
-  useEffect(() => {
-    const styleEl = document.createElement('style');
-    styleEl.id = 'green-port-animations';
-    styleEl.textContent = animationStyles;
-    if (!document.getElementById('green-port-animations')) {
-      document.head.appendChild(styleEl);
-    }
-    return () => {
-      const el = document.getElementById('green-port-animations');
-      if (el) document.head.removeChild(el);
-    };
-  }, []);
-  
-  // 예산 부족 시 자동으로 가능한 최대 투자 규모로 조정
-  useEffect(() => {
-    const canAfford = (size) => INVEST_COSTS[size] <= ports.korea.budget;
-    if (!canAfford(investSize)) {
-      if (canAfford('대')) setInvestSize('대');
-      else if (canAfford('중')) setInvestSize('중');
-      else if (canAfford('소')) setInvestSize('소');
-      else setInvestSize('없음');
-    }
-  }, [ports.korea.budget, investSize]);
-
-  const styles = {
-    container: { minHeight: '100vh', backgroundColor: '#0f172a', color: 'white', padding: '16px', fontFamily: 'system-ui, sans-serif' },
-    startContainer: { 
-      minHeight: '100vh', 
-      background: 'linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #0f172a 100%)', 
-      display: 'flex', 
-      flexDirection: 'column', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
-      color: 'white', 
-      padding: '16px',
-      position: 'relative',
-      overflow: 'hidden'
-    },
-    card: { backgroundColor: '#1e293b', borderRadius: '12px', padding: '16px', marginBottom: '12px' },
-    button: { width: '100%', backgroundColor: '#eab308', color: 'black', padding: '14px', borderRadius: '10px', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '16px' },
-    buttonSecondary: { backgroundColor: '#374151', color: 'white', padding: '10px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', margin: '4px' },
-    buttonSelected: { backgroundColor: '#eab308', color: 'black' },
-    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' },
-    label: { fontSize: '12px', color: '#94a3b8', marginBottom: '8px' },
-    grid3: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' },
-    vsBox: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '12px',
-      padding: '16px 24px',
-      background: 'rgba(255,255,255,0.05)',
-      borderRadius: '16px',
-      marginBottom: '24px'
-    },
-    flagEmoji: { fontSize: '32px' },
-    vsText: { fontSize: '14px', color: '#94a3b8', fontWeight: 'bold' }
-  };
-
-  const getMoodStyle = (mood) => {
-    const moodStyles = {
-      good: { backgroundColor: '#166534', borderLeft: '4px solid #22c55e' },
-      warning: { backgroundColor: '#854d0e', borderLeft: '4px solid #eab308' },
-      danger: { backgroundColor: '#991b1b', borderLeft: '4px solid #ef4444' },
-      crisis: { backgroundColor: '#7c2d12', borderLeft: '4px solid #f97316', boxShadow: '0 0 20px rgba(249,115,22,0.3)' },
-      opportunity: { backgroundColor: '#0f766e', borderLeft: '4px solid #2dd4bf', boxShadow: '0 0 20px rgba(45,212,191,0.3)' },
-      neutral: { backgroundColor: '#1e3a8a', borderLeft: '4px solid #3b82f6' }
-    };
-    return moodStyles[mood] || moodStyles.neutral;
-  };
-
-  const getInvestEffect = () => {
-    const sizeEffect = { '없음': 0, '소': 0.05, '중': 0.15, '대': 0.25 };
-    const divisionBonus = { 'M1': 0, 'M2': 0.05, 'M3': -0.02 };
-    const baseEffect = sizeEffect[investSize];
-    const bonus = divisionBonus[division];
-    const methanolRatio = fuelRatio / 100;
-    const ammoniaRatio = 1 - methanolRatio;
-    return {
-      methanol: baseEffect * methanolRatio + bonus * methanolRatio,
-      ammonia: baseEffect * ammoniaRatio + bonus * ammoniaRatio
-    };
-  };
-
-  const executeTurn = () => {
-    if (SPECIAL_EVENTS[scenario] && SPECIAL_EVENTS[scenario][turn]) {
-      setSpecialEvent(SPECIAL_EVENTS[scenario][turn]);
-      setScreen('special');
-      return;
-    }
-    processNormalTurn();
-  };
-
-  const processNormalTurn = (specialEffect = null, specialCost = 0) => {
-    const event = EVENTS[scenario][turn - 1];
-    const oldShares = { ...shares };
-    setPrevShares(oldShares);
-    const newPorts = JSON.parse(JSON.stringify(ports));
-    
-    // 플레이어(한국) 투자
-    const playerInvestCost = INVEST_COSTS[investSize] + specialCost;
-    const playerRevenue = getAnnualRevenue(oldShares.korea);
-    const newBudget = newPorts.korea.budget - playerInvestCost + playerRevenue;
-    newPorts.korea.budget = newBudget;
-    setTotalInvested(prev => prev + playerInvestCost);
-    
-    // 파산 체크
-    if (newBudget <= 0) {
-      setPorts(newPorts);
-      setBankruptYear(2025 + turn);
-      setScreen('bankrupt');
-      return;
-    }
-    
-    const investEffect = getInvestEffect();
-    newPorts.korea.methanol += investEffect.methanol;
-    newPorts.korea.ammonia += investEffect.ammonia;
-    
-    // 특별 이벤트 효과 적용
-    if (specialEffect) {
-      Object.keys(specialEffect).forEach(port => {
-        if (newPorts[port]) {
-          newPorts[port].methanol += specialEffect[port] * 0.5;
-          newPorts[port].ammonia += specialEffect[port] * 0.5;
-        }
-      });
-    }
-    
-    // AI 투자 및 수익 처리
-    const aiActionsThisTurn = {};
-    ['singapore', 'rotterdam', 'shanghai'].forEach(portKey => {
-      const port = newPorts[portKey];
-      const revenue = getAnnualRevenue(oldShares[portKey]);
-      
-      // AI 투자 결정
-      const aiDecision = getAIInvestment(port, portKey, oldShares, scenario);
-      
-      if (aiDecision.investSize) {
-        const sizeEffect = { '소': 0.05, '중': 0.15, '대': 0.25 };
-        const effect = sizeEffect[aiDecision.investSize];
-        newPorts[portKey].methanol += effect * 0.5;
-        newPorts[portKey].ammonia += effect * 0.5;
-        newPorts[portKey].budget = port.budget - aiDecision.investAmount + revenue;
-        
-        aiActionsThisTurn[portKey] = {
-          investSize: aiDecision.investSize,
-          investAmount: aiDecision.investAmount,
-          revenue: revenue
-        };
-      } else {
-        newPorts[portKey].budget = port.budget + revenue;
-        aiActionsThisTurn[portKey] = {
-          investSize: '없음',
-          investAmount: 0,
-          revenue: revenue
-        };
-      }
-    });
-    
-    setAiActions(aiActionsThisTurn);
-    
-    // 이벤트 효과
-    if (event.competitorBoost) {
-      Object.keys(event.competitorBoost).forEach(port => {
-        if (port !== 'korea') {
-          newPorts[port].methanol += event.competitorBoost[port] * 0.5;
-          newPorts[port].ammonia += event.competitorBoost[port] * 0.5;
-        }
-      });
-    }
-    
-    if (event.globalBoost) {
-      Object.keys(newPorts).forEach(port => {
-        if (event.globalBoost.methanol) newPorts[port].methanol += event.globalBoost.methanol;
-        if (event.globalBoost.ammonia) newPorts[port].ammonia += event.globalBoost.ammonia;
-      });
-    }
-    
-    const finalShares = calculateShares(newPorts);
-    
-    // 경쟁자 추가 반응 (한국 성장 시)
-    const koreaGain = finalShares.korea - oldShares.korea;
-    const reactions = [];
-    
-    if (koreaGain > 1.5 && Math.random() < 0.5) {
-      const r = COMPETITOR_REACTIONS.singapore[Math.floor(Math.random() * COMPETITOR_REACTIONS.singapore.length)];
-      reactions.push({ port: 'singapore', ...r });
-      if (r.boost > 0) {
-        newPorts.singapore.methanol += r.boost * 0.3;
-        newPorts.singapore.ammonia += r.boost * 0.3;
-      }
-    }
-    if (koreaGain > 1 && Math.random() < 0.4) {
-      const r = COMPETITOR_REACTIONS.shanghai[Math.floor(Math.random() * COMPETITOR_REACTIONS.shanghai.length)];
-      reactions.push({ port: 'shanghai', ...r });
-      if (r.boost > 0) {
-        newPorts.shanghai.methanol += r.boost * 0.3;
-        newPorts.shanghai.ammonia += r.boost * 0.3;
-      }
-    }
-    
-    const finalSharesAfterReaction = calculateShares(newPorts);
-    
-    setTurnResult({
-      turn, year: 2025 + turn, event,
-      prevShare: oldShares.korea, newShare: finalSharesAfterReaction.korea,
-      change: finalSharesAfterReaction.korea - oldShares.korea,
-      reactions, 
-      decision: { division, fuelRatio, investSize },
-      playerRevenue,
-      playerInvestCost,
-      aiActions: aiActionsThisTurn,
-      prevShares: oldShares
-    });
-    
-    setPorts(newPorts);
-    setShares(finalSharesAfterReaction);
-    setShareHistory([...shareHistory, finalSharesAfterReaction]);
-    setSpecialEvent(null);
-    setScreen('result');
-  };
-
-  const handleSpecialChoice = (choice) => {
-    if (choice.risk && Math.random() < choice.risk) {
-      processNormalTurn({ korea: -0.05 }, choice.cost || 0);
-    } else {
-      processNormalTurn(choice.effect, choice.cost || 0);
-    }
-  };
-
-  const nextTurn = () => {
-    if (turn >= 15) setScreen('final');
-    else { setTurn(turn + 1); setTurnResult(null); setScreen('game'); }
-  };
-
-  const startGame = (s) => {
-    setScenario(s);
-    const initialPorts = JSON.parse(JSON.stringify(INITIAL_PORTS));
-    const initialShares = calculateShares(initialPorts);
-    setPorts(initialPorts);
-    setShares(initialShares);
-    setShareHistory([initialShares]);
-    setPrevShares(null);
-    setTurn(1);
-    setDivision('M2');
-    setFuelRatio(50);
-    setInvestSize('중');
-    setTotalInvested(0);
-    setAiActions({});
-    setBankruptYear(null);
-    setScreen('game');
-  };
-
-  const resetGame = () => {
-    setScreen('start');
-    const initialPorts = JSON.parse(JSON.stringify(INITIAL_PORTS));
-    setPorts(initialPorts);
-    setShares(calculateShares(initialPorts));
-    setShareHistory([calculateShares(initialPorts)]);
-    setPrevShares(null);
-    setBankruptYear(null);
-  };
-
-  const getGrade = () => {
-    const k = shares.korea;
-    if (k >= 25) return { grade: '🏆 대성공', msg: '동북아 친환경 벙커링 허브의 선두주자!', color: '#22c55e' };
-    if (k >= 20) return { grade: '🥈 성공', msg: '동북아 벙커링 시장의 강자로 자리매김', color: '#3b82f6' };
-    if (k >= 15) return { grade: '🥉 보통', msg: '경쟁에서 현 위치를 유지', color: '#eab308' };
-    return { grade: '❌ 실패', msg: '시장 점유율 하락, 전략 재검토 필요', color: '#ef4444' };
-  };
-
-  const ProgressBar = ({ value, portKey }) => (
-    <div style={{ width: '100%', backgroundColor: '#374151', borderRadius: '6px', height: '14px', overflow: 'hidden' }}>
-      <div style={{ height: '100%', borderRadius: '6px', backgroundColor: PORT_COLORS[portKey], width: `${Math.min(value, 100)}%`, transition: 'width 0.5s ease' }} />
-    </div>
-  );
-
-  const MiniLineChart = ({ history, showChange = false }) => {
-    if (!history || history.length < 2) return null;
-    
-    const width = 200;
-    const height = 80;
-    const padding = 10;
-    
-    const allValues = history.flatMap(h => Object.values(h));
-    const maxVal = Math.max(...allValues);
-    const minVal = Math.min(...allValues);
-    const range = maxVal - minVal || 1;
-    
-    const getY = (val) => height - padding - ((val - minVal) / range) * (height - 2 * padding);
-    const getX = (i) => padding + (i / (history.length - 1)) * (width - 2 * padding);
-    
-    const sortedPorts = Object.keys(INITIAL_PORTS).sort((a, b) => 
-      (history[history.length - 1][b] || 0) - (history[history.length - 1][a] || 0)
-    );
-    
-    const labelHeight = 20;
-    
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <svg width={width} height={height} style={{ backgroundColor: '#1e293b', borderRadius: '8px' }}>
-          {sortedPorts.map(key => {
-            const points = history.map((h, i) => `${getX(i)},${getY(h[key] || 0)}`).join(' ');
-            return (
-              <polyline
-                key={key}
-                points={points}
-                fill="none"
-                stroke={PORT_COLORS[key]}
-                strokeWidth="2"
-              />
-            );
-          })}
-        </svg>
-        
-        {showChange && history.length >= 2 && (
-          <div style={{ fontSize: '11px', lineHeight: '1.6' }}>
-            {sortedPorts.map((key) => {
-              const current = history[history.length - 1][key] || 0;
-              const prev = history[history.length - 2][key] || 0;
-              const change = current - prev;
-              return (
-                <div key={key} style={{ 
-                  color: PORT_COLORS[key], 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '4px',
-                  marginBottom: '2px'
-                }}>
-                  <span>{INITIAL_PORTS[key].flag}</span>
-                  <span style={{ color: change >= 0 ? '#4ade80' : '#f87171' }}>
-                    {change >= 0 ? '+' : ''}{change.toFixed(1)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const MiniMap = ({ shares, ports: currentPorts }) => {
-    const getRadius = (share) => Math.max(16, Math.min(45, share / 1.2));
-    
-    return (
-      <svg width="100%" height="260" viewBox="0 0 400 260" style={{ backgroundColor: '#0c4a6e', borderRadius: '12px', maxWidth: '400px' }}>
-        {/* 제목 - 상단 가운데 */}
-        <text x="200" y="24" textAnchor="middle" fill="#94a3b8" fontSize="15" fontWeight="bold">글로벌 벙커링 허브 현황</text>
-        
-        {/* 세계지도 배경 (간략화된 대륙) */}
-        {/* 유럽 */}
-        <path d="M65 60 Q75 50 90 54 L108 63 Q118 72 114 85 L104 94 Q92 98 80 93 L70 82 Q62 72 65 60" 
-              fill="#1e3a5f" opacity="0.5"/>
-        {/* 아프리카 */}
-        <path d="M90 100 Q100 96 112 102 L118 125 Q114 150 104 160 L88 155 Q80 143 85 122 L90 100" 
-              fill="#1e3a5f" opacity="0.5"/>
-        {/* 아시아 */}
-        <path d="M125 55 Q150 46 195 50 L240 62 Q265 72 272 94 L268 118 Q255 135 228 138 L185 132 Q155 125 135 110 L125 88 Q118 70 125 55" 
-              fill="#1e3a5f" opacity="0.5"/>
-        {/* 동남아/인도네시아 */}
-        <path d="M238 145 Q258 140 275 148 L290 165 Q298 180 290 193 L265 198 Q245 193 240 180 L238 145" 
-              fill="#1e3a5f" opacity="0.5"/>
-        {/* 호주 */}
-        <path d="M300 175 Q325 167 350 175 L365 200 Q370 225 358 238 L325 242 Q298 235 294 210 L300 175" 
-              fill="#1e3a5f" opacity="0.5"/>
-        {/* 북미 */}
-        <path d="M-5 50 Q25 40 52 50 L72 75 Q82 100 72 120 L45 136 Q20 132 2 110 L-5 78 Q-15 62 -5 50" 
-              fill="#1e3a5f" opacity="0.5"/>
-        {/* 남미 */}
-        <path d="M35 155 Q52 146 70 155 L78 188 Q74 228 62 250 L42 255 Q28 243 35 210 L35 155" 
-              fill="#1e3a5f" opacity="0.5"/>
-        
-        {/* 항로 연결선 */}
-        <line x1="88" y1="78" x2="295" y2="195" stroke="#1e40af" strokeWidth="1.5" strokeDasharray="5,4" opacity="0.6"/>
-        <line x1="210" y1="90" x2="295" y2="195" stroke="#1e40af" strokeWidth="1.5" strokeDasharray="5,4" opacity="0.6"/>
-        <line x1="210" y1="90" x2="245" y2="122" stroke="#1e40af" strokeWidth="1.5" strokeDasharray="5,4" opacity="0.6"/>
-        <line x1="88" y1="78" x2="210" y2="90" stroke="#1e40af" strokeWidth="1.5" strokeDasharray="5,4" opacity="0.6"/>
-        
-        {/* 로테르담 (유럽) - 애니메이션 */}
-        <circle cx="88" cy="78" r={getRadius(shares.rotterdam)} fill={PORT_COLORS.rotterdam} style={{ transition: 'r 0.8s ease-out' }}>
-          <animate attributeName="opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite" />
-        </circle>
-        <text x="88" y="52" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">NL</text>
-        <text x="60" y="82" textAnchor="end" fill="white" fontSize="13">{shares.rotterdam.toFixed(1)}%</text>
-        
-        {/* 한국 - 강조 테두리 + 펄스 애니메이션 */}
-        <circle cx="210" cy="90" r={getRadius(shares.korea) + 6} fill="none" stroke="#eab308" strokeWidth="3" strokeDasharray="6,3">
-          <animate attributeName="stroke-dashoffset" values="0;18" dur="1s" repeatCount="indefinite" />
-        </circle>
-        <circle cx="210" cy="90" r={getRadius(shares.korea)} fill={PORT_COLORS.korea} style={{ transition: 'r 0.8s ease-out' }}>
-          <animate attributeName="opacity" values="0.9;1;0.9" dur="2s" repeatCount="indefinite" />
-        </circle>
-        <text x="210" y="62" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">KR</text>
-        <text x="240" y="86" textAnchor="start" fill="#eab308" fontSize="14" fontWeight="bold">{shares.korea.toFixed(1)}%</text>
-        
-        {/* 상하이 - 애니메이션 */}
-        <circle cx="245" cy="122" r={getRadius(shares.shanghai)} fill={PORT_COLORS.shanghai} style={{ transition: 'r 0.8s ease-out' }}>
-          <animate attributeName="opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite" begin="0.5s" />
-        </circle>
-        <text x="275" y="118" textAnchor="start" fill="white" fontSize="13">CN</text>
-        <text x="275" y="134" textAnchor="start" fill="white" fontSize="13">{shares.shanghai.toFixed(1)}%</text>
-        
-        {/* 싱가포르 - 애니메이션 */}
-        <circle cx="295" cy="195" r={getRadius(shares.singapore)} fill={PORT_COLORS.singapore} style={{ transition: 'r 0.8s ease-out' }}>
-          <animate attributeName="opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite" begin="1s" />
-        </circle>
-        <text x="295" y="168" textAnchor="middle" fill="white" fontSize="14">SG</text>
-        <text x="295" y="228" textAnchor="middle" fill="white" fontSize="13">{shares.singapore.toFixed(1)}%</text>
-        
-        {/* 설명 - 우측 하단 */}
-        <text x="392" y="252" textAnchor="end" fill="#64748b" fontSize="11">원 크기 = 시장 점유율</text>
-      </svg>
-    );
-  };
-
-  // 시나리오별 성장률 설정
-  const GROWTH_CONFIG = {
-    A: { base: 100, variance: 30, name: '안정 성장' },   // 보통 성장
-    B: { base: 150, variance: 50, name: '급속 성장' },   // IMO 강화 → 빠른 성장  
-    C: { base: 80, variance: 40, name: '불확실 성장' }   // 경쟁 심화 → 변동 큼
-  };
-  
-  // 이벤트별 선박 수 영향
-  const getEventShipEffect = (event) => {
-    if (!event) return 0;
-    const title = event.title;
-    
-    // 긍정적 이벤트 → 선박 증가
-    if (title.includes('발주 폭증') || title.includes('수요 급증')) return 80;
-    if (title.includes('수요') && title.includes('+')) return 40;
-    if (title.includes('IMO') && title.includes('강화')) return 60;
-    if (title.includes('의무화')) return 50;
-    
-    // 부정적 이벤트 → 선박 감소/정체
-    if (title.includes('침체') || title.includes('위기')) return -40;
-    if (title.includes('지연') || title.includes('연기')) return -20;
-    if (title.includes('사고') || title.includes('폭발')) return -30;
-    
-    // 중립
-    return 0;
-  };
-  
-  // 전체 선박 수 계산 (시나리오 + 이벤트 반영)
-  const getTotalShips = (currentTurn, currentScenario) => {
-    const baseShips = 1000; // 2026년 기준
-    
-    if (!currentScenario || currentTurn <= 1) return baseShips;
-    
-    const config = GROWTH_CONFIG[currentScenario] || GROWTH_CONFIG.A;
-    let totalShips = baseShips;
-    
-    // 각 턴별 성장 계산 (이벤트 영향 포함)
-    for (let t = 1; t < currentTurn; t++) {
-      const event = EVENTS[currentScenario]?.[t - 1];
-      const eventEffect = getEventShipEffect(event);
-      
-      // 기본 성장 + 랜덤 변동 (시드 기반으로 일관성 유지)
-      const seed = t * 1000 + currentScenario.charCodeAt(0);
-      const pseudoRandom = Math.sin(seed) * 0.5 + 0.5; // 0~1
-      const variance = (pseudoRandom - 0.5) * 2 * config.variance;
-      
-      const yearlyGrowth = Math.round(config.base + variance + eventEffect);
-      totalShips += Math.max(0, yearlyGrowth); // 음수 방지
-    }
-    
-    return totalShips;
-  };
-  
-  // 점유율 기반 선박 수 계산
-  const getShipCount = (share, totalShips) => {
-    return Math.round(totalShips * share / 100);
-  };
-  
-  // 선박 아이콘 바 생성
-  const ShipBar = ({ count, maxCount, color, isKorea }) => {
-    const shipCount = Math.min(10, Math.ceil(count / maxCount * 10)); // 최대 10개 아이콘
-    return (
-      <div style={{ display: 'flex', gap: '1px', alignItems: 'center' }}>
-        {[...Array(shipCount)].map((_, i) => (
-          <span key={i} style={{ 
-            fontSize: '10px', 
-            opacity: isKorea ? 1 : 0.7,
-            filter: isKorea ? 'none' : 'grayscale(30%)'
-          }}>🚢</span>
-        ))}
-        <span style={{ fontSize: '11px', color: '#94a3b8', marginLeft: '4px' }}>{count}척</span>
-      </div>
-    );
-  };
-
-  // 국가별 현황 테이블
-  const CountryStatusTable = ({ shares, ports: currentPorts, prevShares: oldShares, currentTurn, currentScenario }) => {
-    const sortedKeys = Object.keys(shares).sort((a, b) => shares[b] - shares[a]);
-    const totalShips = getTotalShips(currentTurn || 1, currentScenario);
-    const prevTotalShips = getTotalShips((currentTurn || 1) - 1, currentScenario);
-    const shipGrowth = totalShips - prevTotalShips;
-    const maxShipCount = getShipCount(Math.max(...Object.values(shares)), totalShips);
-    
-    return (
-      <div style={{ ...styles.card, padding: '16px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <span style={{ fontSize: '14px', fontWeight: 'bold' }}>📊 각국 현황</span>
-          <div style={{ textAlign: 'right' }}>
-            <span style={{ fontSize: '12px', color: '#94a3b8' }}>🚢 친환경 급유선박 {totalShips.toLocaleString()}척</span>
-            {shipGrowth !== 0 && (
-              <span style={{ 
-                fontSize: '11px', 
-                marginLeft: '6px',
-                color: shipGrowth > 0 ? '#4ade80' : '#f87171' 
-              }}>
-                ({shipGrowth > 0 ? '+' : ''}{shipGrowth})
-              </span>
-            )}
-          </div>
-        </div>
-        <div style={{ fontSize: '13px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 2.5fr 0.8fr 1fr 0.8fr', gap: '6px', marginBottom: '10px', color: '#64748b', borderBottom: '1px solid #374151', paddingBottom: '8px' }}>
-            <span>국가</span>
-            <span>급유선박</span>
-            <span style={{ textAlign: 'right' }}>점유율</span>
-            <span style={{ textAlign: 'right' }}>예산</span>
-            <span style={{ textAlign: 'right' }}>변동</span>
-          </div>
-          {sortedKeys.map(key => {
-            const change = oldShares ? shares[key] - oldShares[key] : 0;
-            const shipCount = getShipCount(shares[key], totalShips);
-            return (
-              <div key={key} style={{ 
-                display: 'grid', 
-                gridTemplateColumns: '1.8fr 2.5fr 0.8fr 1fr 0.8fr', 
-                gap: '6px', 
-                padding: '8px 0',
-                backgroundColor: key === 'korea' ? 'rgba(234,179,8,0.1)' : 'transparent',
-                borderRadius: '6px',
-                alignItems: 'center'
-              }}>
-                <span style={{ color: PORT_COLORS[key], fontWeight: key === 'korea' ? 'bold' : 'normal', fontSize: '13px' }}>
-                  {INITIAL_PORTS[key].flag} {INITIAL_PORTS[key].name}
-                </span>
-                <ShipBar count={shipCount} maxCount={maxShipCount} color={PORT_COLORS[key]} isKorea={key === 'korea'} />
-                <span style={{ textAlign: 'right', fontWeight: 'bold', fontSize: '13px' }}>{shares[key].toFixed(1)}%</span>
-                <span style={{ textAlign: 'right', color: '#fbbf24', fontSize: '13px' }}>{currentPorts[key].budget}억</span>
-                <span style={{ textAlign: 'right', color: change >= 0 ? '#4ade80' : '#f87171', fontSize: '13px' }}>
-                  {change >= 0 ? '+' : ''}{change.toFixed(1)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  // 국기 컴포넌트 (물방울 스타일)
-  const FlagBubble = ({ country, size = 40 }) => {
-    const flagStyles = {
-      korea: (
-        <svg width={size} height={size} viewBox="0 0 40 40">
-          <circle cx="20" cy="20" r="18" fill="white" stroke="#e5e7eb" strokeWidth="1"/>
-          {/* 태극 */}
-          <circle cx="20" cy="20" r="8" fill="#c60c30"/>
-          <path d="M20 12 A8 8 0 0 1 20 28 A4 4 0 0 1 20 20 A4 4 0 0 0 20 12" fill="#003478"/>
-          {/* 건곤감리 간략화 */}
-          <rect x="6" y="8" width="6" height="2" fill="#000"/>
-          <rect x="6" y="12" width="6" height="2" fill="#000"/>
-          <rect x="28" y="26" width="6" height="2" fill="#000"/>
-          <rect x="28" y="30" width="6" height="2" fill="#000"/>
-        </svg>
-      ),
-      singapore: (
-        <svg width={size} height={size} viewBox="0 0 40 40">
-          <circle cx="20" cy="20" r="18" fill="white" stroke="#e5e7eb" strokeWidth="1"/>
-          <path d="M2 20 A18 18 0 0 1 38 20 Z" fill="#ed2939"/>
-          {/* 초승달 */}
-          <circle cx="14" cy="14" r="5" fill="white"/>
-          <circle cx="16" cy="14" r="4" fill="#ed2939"/>
-          {/* 별들 */}
-          <circle cx="22" cy="10" r="1.2" fill="white"/>
-          <circle cx="26" cy="12" r="1.2" fill="white"/>
-          <circle cx="28" cy="16" r="1.2" fill="white"/>
-          <circle cx="24" cy="18" r="1.2" fill="white"/>
-          <circle cx="20" cy="16" r="1.2" fill="white"/>
-        </svg>
-      ),
-      china: (
-        <svg width={size} height={size} viewBox="0 0 40 40">
-          <circle cx="20" cy="20" r="18" fill="#de2910" stroke="#e5e7eb" strokeWidth="1"/>
-          {/* 큰 별 */}
-          <polygon points="10,14 12,18 16,18 13,21 14,25 10,22 6,25 7,21 4,18 8,18" fill="#ffde00"/>
-          {/* 작은 별들 */}
-          <circle cx="18" cy="8" r="2" fill="#ffde00"/>
-          <circle cx="22" cy="10" r="2" fill="#ffde00"/>
-          <circle cx="22" cy="15" r="2" fill="#ffde00"/>
-          <circle cx="18" cy="18" r="2" fill="#ffde00"/>
-        </svg>
-      ),
-      netherlands: (
-        <svg width={size} height={size} viewBox="0 0 40 40">
-          <defs>
-            <clipPath id="nlCircle">
-              <circle cx="20" cy="20" r="18"/>
-            </clipPath>
-          </defs>
-          <circle cx="20" cy="20" r="18" fill="white" stroke="#e5e7eb" strokeWidth="1"/>
-          <g clipPath="url(#nlCircle)">
-            <rect x="0" y="2" width="40" height="12" fill="#ae1c28"/>
-            <rect x="0" y="14" width="40" height="12" fill="white"/>
-            <rect x="0" y="26" width="40" height="12" fill="#21468b"/>
-          </g>
-        </svg>
-      )
-    };
-    
-    return (
-      <div style={{ 
-        width: size, 
-        height: size, 
-        borderRadius: '50%',
-        overflow: 'hidden',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}>
-        {flagStyles[country]}
-      </div>
-    );
-  };
-
-  // 시작 화면
-  if (screen === 'start') {
-    return (
-      <div style={styles.startContainer}>
-        <div style={{ position: 'absolute', top: '8%', left: '5%', fontSize: '60px', opacity: 0.15, animation: 'flyIn 2s ease-out, pulse 3s infinite 2s' }}>🚢</div>
-        <div style={{ position: 'absolute', top: '18%', right: '8%', fontSize: '50px', opacity: 0.15, animation: 'bounceIn 1s ease-out 0.3s both, pulse 3s infinite 1.3s' }}>⚓</div>
-        <div style={{ position: 'absolute', bottom: '28%', left: '6%', fontSize: '55px', opacity: 0.15, animation: 'bounceIn 1s ease-out 0.6s both, pulse 3s infinite 1.6s' }}>🛢️</div>
-        <div style={{ position: 'absolute', bottom: '12%', right: '5%', fontSize: '65px', opacity: 0.15, animation: 'bounceIn 1s ease-out 0.9s both, pulse 3s infinite 1.9s' }}>🌊</div>
-        <div style={{ position: 'absolute', top: '50%', left: '3%', fontSize: '45px', opacity: 0.1, animation: 'flyIn 2.5s ease-out 0.5s both, pulse 4s infinite 2.5s' }}>🚢</div>
-        <div style={{ position: 'absolute', bottom: '35%', right: '3%', fontSize: '40px', opacity: 0.1, animation: 'flyIn 2.5s ease-out 0.8s both, pulse 4s infinite 2.8s' }}>🚢</div>
-        
-        <div style={{
-          background: 'rgba(255,255,255,0.05)',
-          backdropFilter: 'blur(10px)',
-          borderRadius: '24px',
-          padding: '40px 32px',
-          textAlign: 'center',
-          border: '1px solid rgba(255,255,255,0.1)',
-          maxWidth: '360px'
-        }}>
-          <div style={{ fontSize: '48px', marginBottom: '8px' }}>⚓</div>
-          <div style={{ fontSize: '12px', color: '#94a3b8', letterSpacing: '3px', marginBottom: '4px' }}>STRATEGY SIMULATION</div>
-          <h1 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '8px', background: 'linear-gradient(90deg, #eab308, #22c55e)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>GREEN PORT</h1>
-          <p style={{ fontSize: '13px', color: '#cbd5e1', marginBottom: '24px' }}>동북아 친환경 벙커링 허브를 선점하라</p>
-          
-          {/* 국기 물방울 스타일 VS 구도 */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '12px',
-            padding: '20px 24px',
-            background: 'rgba(255,255,255,0.05)',
-            borderRadius: '16px',
-            marginBottom: '24px'
-          }}>
-            <FlagBubble country="korea" size={44} />
-            <span style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 'bold' }}>vs</span>
-            <FlagBubble country="singapore" size={36} />
-            <FlagBubble country="china" size={36} />
-            <FlagBubble country="netherlands" size={36} />
-          </div>
-          
-          <button 
-            onClick={() => setScreen('scenario')} 
-            style={{ 
-              ...styles.button, 
-              background: 'linear-gradient(90deg, #eab308, #f59e0b)',
-              fontSize: '18px',
-              padding: '16px 32px',
-              borderRadius: '50px'
-            }}
-          >
-            🎮 게임 시작
-          </button>
-          
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', marginTop: '20px', fontSize: '12px', color: '#94a3b8' }}>
-            <span>📅 2026-2040</span>
-            <span>🎯 15년 전략</span>
-            <span>⚡ 실시간 경쟁</span>
-          </div>
-        </div>
-        
-        {/* KMI 로고 - 물방울 스타일 원형 */}
-        <div style={{ 
-          marginTop: '32px',
-          width: '60px',
-          height: '60px',
-          borderRadius: '50%',
-          background: 'white',
-          boxShadow: '0 4px 15px rgba(0,0,0,0.3)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden'
-        }}>
-          <img 
-            src="data:image/webp;base64,UklGRt4SAABXRUJQVlA4WAoAAAAgAAAAuQEA8wAASUNDUMgBAAAAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADZWUDgg8BAAAJBdAJ0BKroB9AA+USSQRiOhoaEj8Fm4cAoJZW7hc/D5292TGRPVf3j8ZOkP6X6UfdV3Fdg+Zrzh+cvUJ+vX9d+Av6Q9gD9hekl5gP2p9Zj/Zerv+zeon/l+pQ9Cnpkf3Wynry//eO1X+/8tZKsuO/jf3j/RcM/AI9Vf5ngfwBd29OwVi/R/YD/nXmwaTPrIYk4SzovWC+pQLhPq4o0knCWdF6wXUdmYGy3qJYgUXrBfUoFwn1cUZin7//qudM+ZIDF9/NraVHg8TepGhNYxGv46L1gvqUC4T6my3b6FB9H89HDvxsX8oM7Tx5QbJnzCWSDiaL9ZBJwlnResF9SSSRuWNC0FKdRlHiLOeO2EJYq6akRcJsQuE+rihLXK4Ai8d/+x5ORLJEh+ZmAXtBRbvGuJs/hEISHKKefbv9G3l9QLZOuI9TWC+pKhNEvgnKGz4b5o7vWc1Vy90c19nMw6CgPeR2JddXcJi+XHfmoCc/6ybukTbFMTP0JyqHu6oR5aojXkI2TwSawX1JaNsWwM3Hg95+ELEnh3iZ/6t79N0sANGgUtWcWJ2GwKjpI6bVR0emXeOkHWQ4Q4o0knB4wCXACewWJZozcssW5bpBrCmY/Ps4t3ihdTDeUQFBA+807BqUqwH+UgK2GQSfZtOEs6I0XbYcnjD8507DOW5JEBNU7m8XvPJqR6VLIjVie/6laQKqACCo7YcI2UEEaoizM9xzyKril/d4B+mNgRWiCA6LkFC6CThLOhxRii3L6G9fDYSqJGdMbDIG2zS66EzXuoipwwvF+qCY79j/U64LxYiuzkkC34Jro04SzovWC+ufxP7foIl9jQLaomA1aClEA1lNvErdqThLOi9YL5IGoINm9Rwv1qkJA6yLh39Uxf/U+sgbm2bKEpQLhPq4o0km5wX/nsL0UgmjyYUDOkva6/ME+pDwYy/t/+d5/7kkgo0knCWdF6wX160Kry3x9ddKl87sfWY+dF6wX1KBcJ9XFGkk4SzovWBQAA/v+3MgAAAJYAktO9Eyxl8Bmi4qUy11gcb8P8g4nQzOEoUtenL+K8o/MBoMgGVHfpQAjUikaQOctTCT57ts1DoUUV5JnNdT/En2uuyLNS6WQokqi4kaoCrhNm+zN94siz1Rx55iuyymzhx901Wm4zqRinVPiP/FKvBfeRhleiPUh53Fd/B5VLN1ihmOJwwkTNtxfilP5EtUJQDSN8TXha9WnCdewHUxfSAZvtBqdh4n178EbFyVFUIssCJxJfnibHHzbvURHsbVemGUVi2H8Fh0uB12Z0VRPxNilG6JUjHhHdTywoe0m1L5ubysYpijh/yA4oZBiADRvgsFrXNNGTNli1AUyU9BTjyEIlvm/Ly4p1/BOdZABkcHNeDvbuTSWpKftOOIj5iye1OeK6rduUpHGiD8kXwxFes+6KhaB+RLEVDhy2bNIGsCyiuXpN78s37C3zIHwZ5ygbvAcG9kwk9ArknPdGMnNYJxD4rQIGm8U2p6hzHULrVs4mh+Ux6JygrvDsIz+Ugz1c9Ly3JdWo4Zmu/ey/ZYf24cOx658A0wK3jO/YElJ4fUu8ikxvngDKpqfLKurpTlFkQGgA0qPV5/VP8FpYsxqvVQlxU44SZ0IYwLDQD9xA+rJkAJYuAeO/1uj7hTAuMELnrDbbFuy6Vv7qqPJ0gud3sUIyx/Mnf0mUVOAImxfx5BIinzusWLn18AVM4J2Trfl77Q6428EsTKMWLGUrzljFaglc7JEmS03DugQceLI9dr2czr4mODZ7Srv9GSVDv/dm3mUAnP69z1d3+5Lb1mAVMGNz4ZjFAlHKL7hIrctAWQ/dUePsa14p+rekLkgp9wH1xdQWKnY/OUT5T9aaXmRTbiXPOYMnYdpdF7ZxPPpK/+7Q1s3mtvbTz3LJi1XJN2cCYQEC//XX0M9Wu9AUoUb98HeId1ThQ7dQSX/h255IItfQG2juXej3wGlNrbuJY6jrp/uHFnGqCd9HS5+PRvCAsHi+boP99x3kPERSbI2Z8+pcFaZJ4uliP7l/Y8CpPuq0en+ta1YpJaNF4XaP+rCeW8A5NNOahCrCqhxshjQxcyAE+bNte24dIkEZzYmaJAxk38PUGlUtJrCSBkKp2ySLJNc0ENsluaaE5f10zb+OQvGVQSXctfcD9/+UrmSOpXw/icOy0BXyPEY3s8s0hLSpqr3ZXp7Qesjt55a7B0icOeN+F++/eMWAUum8znaNN7XdCDl+8lKrWxxTlL4QLwkcHa3qI4V2JgBrZ4tAxgky9X/xHG0kCA87HUNA8ule0X3IFcXWq6xvPkCDGLD/eDBphx+RQ3yS9xJLlJBWeEuUjlikKQ3ZzPy2jlnxwhMYVNMjEK6seTawfhLSOpb4OBySBZKVF+/kxFYHt0Xv3R2nQ6CAN9HZ/vxbQwfOPletAS1fNY6cO3rHNZQksj7QUeI/mQJaDxY6WEZnk81vOcaTFHvYGOs98pMquS2xkPm2ojc0HfqZR1/K44IZoGXQPjKjL2UdzgRZ/k3++GdbACC9C66sD8xfG2+mCefvfUumjsPJvtZAVOHiiHAIX6Fd2NSzISTeckA8Uz22/JYu45zDBDWtQlcn2WLhKyNPZsx9xYo9dj0G9GjfeWrhTsDuBCilHgWAfx5KJ6/tLZgZxkvH7ensqddGaBIGxQQNTYj1EYORY23aMksfIVc1BSqNd8UNTEWn0EtvVnaFRVhh1EsG1QhBRW3uu9e8dfEdeH4CoCBKSFcFKcN0vaxRStqIWJtmdBifK+VLWEjf3XHxF9CfPmBIfQ32Om7PI8zzvoDeY2/PisaSR7Xf5HSnyvxgruYoQzpXb18gSAQg74m+COz94LrbFMei8ldr4PCrGcdxc7o2xWuKQgKw+HdaohsvTOQvbHva3STpPI2nFPL1keqggHKzY+7Ol+yI22NReiE9phbFMq/OZgCUxf+c2ZA3fQ9UnJVun/4qPs2jAgnw4s/q6m0oUXGGonnq0skfgDcz4BYsq114GQ82QzLc6jdZEWZioEFVN68AIv+rhaG6A3l0ufmIW5V/R5wssoVuIJjOIVTTFAdwQbO+l027aO3dsYLiTr1FRdE01Vkgl2pIheA9zuO58t+Q6tKHbK7kzjctjXM1kfmb+H7FelVWZGf7RJvypoymx+C0s/rEDsSQ2Hr5YDxMpQTxkyiB5xCHL0DSkUrn0N7qff/r94nPwt/NkjGDBn9RYbwGe44K/tqHooQWAg19tbGrYJoH53U5Wpgkvp4QSsIOtGpnh6LE4WzqoMsJGPeE+PfnhGu3GXHGuiPvMSNitUBLotTobctVjBWiAWNgRRk6PLXPc19O6/n6eKCJwjal3I1eLlPk39wez7jIXVv+ex3dxRna3cUI7LdiHyjXfJybytPVrNHXmkRS+7dDrwyRbg836hst0mpcRNf4L895QJ8zV0jRGwSeBKwEiS+J7WKDLfLuotWPlOc0DtxD3HiB55ckVuzP7iBnG9/Z9RQeDtZEQ6cAs3oxVIkNpgHaegACjetaHR5s9nQqjIg2Gk1IIkyzUqYLRz5YId9XZty+JlUKKZ4gFqB4t8B6NpngAZ1kJMlot1hxZqPXGHadBVw1rwcg7FxLeZY3Ut13IDSyK7CtT6tnmUtw+q05Eo4BVt9sIdmWozOmTK2KIUSMXQMzy2APKWEJ/lP5opGd5qKiYZIKMsx0hACP5X4f+WfmGKpg9azApaBUz4+CA2Mmq+pEj76XPV7hLYf4LgL9vG3QDK+mEwojru5t4mxRKDchEg9Nq0ERTWxJWJlppH1LKuGjjY+N2VirMH1TfxQGsnPuSeTuZ04cZymzyNMCFXguF+aPiLK3L5YFt3K77zl52ymoGl7w4GWqPcr4jWJyGMBU5UoyvVe7x7uNX3VMpxyy+xzVQpKYFM+bVReF9Lg+l0Ij95/ZCOmadm7EndoDdvkcnrcFXDL17NGn37uA0t2qXVRs1O6qDIdDhYlZdOJvBrzmLLDJXP/GHuJr9yEufbJJfGDO906q9IN/S0uz7ks+PcSNArszLL7bOhOX/Z1zwO2ZDJpsFxdz224WBhAhqf49Oa+USaEm7QVT218xkFH1FcC93V/KGu2unjVMvyiS2YVVBfCrLl1I78E5J+K1Od0xpLFTXmNNAnXGR44s0wHuOhw+rCkizo/ViqbRxHGWJA/A/7tcCcvmgu+IftucxpO3q3P97HTr+dGzmixFiD05on8VQo7SIm5iCaIUjWlcCteb/9U0Apj2BPQFjpkKLM4yQdXQZlpybc6SjxP/wut+Xmiamw7kFM3Bt6FYk9YdYhDpoJ8HqX6mdfh3dMeZpefdoNZaOo/okbfpMKyIRAbOnzF09Y+c47lQYTv9x65bsIYPs8McFpDQ4tEmiXMML6A0kLFb58CJ7OkHo7Z8DYPWazYLWSVmrXqKL8XzrMoGr9ShHkG6ojNM8eHPviNY2RI2POo2n6Fv5NrRprjAMi0qbglaVo9tXCDsiAgmo4F/GqnRMVkWxNeGdGH3j+5JY61liUHJq0m9uuY+NLRzkCegOrhHgTQ7HmmDe6hbnGofhvX8r8pVkMbtJKjzZsmxbCoFGYKvw+7tPSRGSBbgnehjlz0RD5fAA9nMdhB69Tck2pWfrohZJ6j2P2pUlaOcNxG6e/fD9s7XYTMw++90wUk5YQhoPhDnKmHepB7J5ncKyTwn4PqQlyXQDZ8Rs0fQv4ncvT65Drbi7aDAug4Fw6MQwTuJLUV/13Dspnxkl4daIBEh3C//EykbHqABc+5fh4udWWEvfIP71rosYi//cGvzgVJprvBxYGE1HfUrlAzmAZjN+FmQWyas+4hgau8E8LOezijEEzkLo0eL0QWZARG7V1lepaoKNXugE9SPrvExTAQCkdMZYSO1j8W2hj2gcF70NDLGZB8d1WbiPuvZxNdE9Wum9H/mk17bspj5HPpGNYuJxwY9Z4WGYhHNaoCi2AYst2IPPnb2m57MIMSfzEn5MNe9DHrqDWNDdbSy1Iva1NYOiUJjEZgqn8b7FKO+HN19B+U1VGVYB1dfxmttCp9y7BnmCEdUSwO1tA83TVvyZz1GJiQuFegyKk+9S2l7P53g1x2l822w00KzO2AVrYHfw3FWiKNgWI8MQBm02XTL4rAqNKCwMDtecrz1QWE/xpEhb1ss6w685BW9enfP/c9E8KLTsPkR7Tp95Hn3iAhR+/rShPath74CRdhLHgcBt/MckPWJ3SKzPc0IQ/2BsY4qKPa4Y/R0NBwzCKwEmkrC2gkSoJiNIfJlGwjj92Aga+VMbfSlpPtCUJr9Zak3bkeB0SBbbAu01oN60yARMt91Ip3prtI1YeZn55gLHkgLhO1LmVN4vHYJYq6Wh6D+ODhpbHTJfqJDW28ebUkmy24GW2ROSL3e6n4rA4vwEd9X+iPcEZlHU3Ptn2saZRUk44VQhTf+JmFHwlIOvfy2vZGfa6wxV0d0DqEwn0oBHAY+R6amcwx7aDPG+lVetIo0N4+4SlrjhjsrJr1iBW4af6Hy3L4nv5OMN8xemCTbbVKkr1hGEqLZeFnGSG0DxwbV3oJjL1pD97bzGXobi6Y3PSCwbz5dR0e8Dh3k7Uwmv4lTHTqh9hKgQBJ1k9Ssw/apD8zM5QP+urZQd0nGQEJ7hB6ipQfsE3zcaf1E5fZG74SaR3vmRLFFEAAAALzQOAz0wOxmhpXF89xy9da4yu+eCNb9QCCEkelr02e6UzvGfavDQpkxXnDr4A1UYmsX87u+JRPRWnqztWPLV7YVQ2QAAAAAAAA=" 
-            alt="KMI 로고" 
-            style={{ height: '45px', objectFit: 'contain' }}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  // 시나리오 선택
-  if (screen === 'scenario') {
-    return (
-      <div style={styles.container}>
-        <h2 style={{ fontSize: '20px', fontWeight: 'bold', marginBottom: '20px', textAlign: 'center' }}>시나리오 선택</h2>
-        <div style={{ maxWidth: '400px', margin: '0 auto' }}>
-          <button onClick={() => startGame('A')} style={{ width: '100%', padding: '20px', backgroundColor: '#166534', borderRadius: '12px', border: 'none', cursor: 'pointer', textAlign: 'left', marginBottom: '12px', color: 'white' }}>
-            <div style={{ fontWeight: 'bold', fontSize: '16px', marginBottom: '8px' }}>🌤️ EASY - 보수 시나리오</div>
-            <div style={{ fontSize: '13px', color: '#86efac' }}>규제 지연 · 느린 전환 · 경쟁 완만</div>
-          </button>
-          <button onClick={() => startGame('B')} style={{ width: '100%', padding: '20px', backgroundColor: '#1e40af', borderRadius: '12px', border: '2px solid #eab308', cursor: 'pointer', textAlign: 'left', marginBottom: '12px', color: 'white' }}>
-            <div style={{ fontWeight: 'bold', fontSize: '16px', marginBottom: '8px' }}>⛅ NORMAL - 기준 시나리오 <span style={{ fontSize: '10px', backgroundColor: '#eab308', color: 'black', padding: '2px 8px', borderRadius: '4px', marginLeft: '8px' }}>추천</span></div>
-            <div style={{ fontSize: '13px', color: '#93c5fd' }}>IMO/EU 예정대로 · 표준 전환 · 적정 경쟁</div>
-          </button>
-          <button onClick={() => startGame('C')} style={{ width: '100%', padding: '20px', backgroundColor: '#991b1b', borderRadius: '12px', border: 'none', cursor: 'pointer', textAlign: 'left', marginBottom: '12px', color: 'white' }}>
-            <div style={{ fontWeight: 'bold', fontSize: '16px', marginBottom: '8px' }}>🌩️ HARD - 적극 시나리오</div>
-            <div style={{ fontSize: '13px', color: '#fca5a5' }}>규제 강화 · 빠른 전환 · 치열한 경쟁</div>
-          </button>
-        </div>
-        <button onClick={() => setScreen('start')} style={{ ...styles.buttonSecondary, display: 'block', margin: '16px auto' }}>← 뒤로</button>
-      </div>
-    );
-  }
-
-  // 특별 이벤트
-  if (screen === 'special' && specialEvent) {
-    return (
-      <div style={styles.container}>
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '8px' }}>⚠️</div>
-          <h2 style={{ fontSize: '20px', fontWeight: 'bold' }}>특별 상황 발생!</h2>
-        </div>
-        
-        <div style={{ ...styles.card, ...getMoodStyle('crisis'), padding: '24px', textAlign: 'center' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>{specialEvent.title}</h3>
-          <p style={{ color: '#fbbf24', marginBottom: '8px' }}>현재 예산: {ports.korea.budget}억원</p>
-        </div>
-        
-        <div style={{ marginTop: '16px' }}>
-          {specialEvent.choices.map((choice, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSpecialChoice(choice)}
-              disabled={choice.cost && choice.cost > ports.korea.budget}
-              style={{
-                ...styles.card,
-                width: '100%',
-                textAlign: 'left',
-                cursor: choice.cost && choice.cost > ports.korea.budget ? 'not-allowed' : 'pointer',
-                opacity: choice.cost && choice.cost > ports.korea.budget ? 0.5 : 1,
-                border: 'none',
-                marginBottom: '8px'
-              }}
-            >
-              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>{choice.text}</div>
-              {choice.cost && <div style={{ fontSize: '12px', color: '#ef4444' }}>비용: {choice.cost}억원</div>}
-              {choice.risk && <div style={{ fontSize: '12px', color: '#eab308' }}>⚠️ 실패 위험: {choice.risk * 100}%</div>}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // 메인 게임
-  if (screen === 'game') {
-    const event = EVENTS[scenario][turn - 1];
-    const currentBudget = ports.korea.budget;
-    const canAfford = (size) => INVEST_COSTS[size] <= currentBudget;
-    const annualRevenue = getAnnualRevenue(shares.korea);
-    
-    // 현재 선택한 투자가 예산 초과인지 확인
-    const currentInvestCost = INVEST_COSTS[investSize];
-    const canProceed = currentInvestCost <= currentBudget;
-    
-    // M1/M2/M3별 연료 배분 설명
-    const getDivisionFuelDesc = (m) => {
-      if (m === 'M1') return `메탄올 ${fuelRatio}%`;
-      if (m === 'M2') return `메탄올 ${fuelRatio}% + 암모니아 ${100-fuelRatio}%`;
-      if (m === 'M3') return `암모니아 ${100-fuelRatio}%`;
-      return '';
-    };
-    
-    return (
-      <div style={{ ...styles.container, paddingBottom: '100px' }}>
-        <div style={{ ...styles.header, marginBottom: '20px' }}>
-          <div style={{ fontWeight: 'bold', fontSize: '18px' }}>⚓ GREEN PORT</div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontWeight: 'bold', fontSize: '24px' }}>{2025 + turn}년</div>
-            <div style={{ fontSize: '14px', color: '#94a3b8' }}>{turn}/15턴</div>
-          </div>
-        </div>
-        
-        {/* 국가별 현황 테이블 */}
-        <CountryStatusTable shares={shares} ports={ports} prevShares={prevShares} currentTurn={turn} currentScenario={scenario} />
-        
-        {/* 지도 */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-          <MiniMap shares={shares} ports={ports} />
-        </div>
-        
-        {/* 뉴스 - 슬라이드 애니메이션 (더 화려하게) */}
-        <div style={{ 
-          ...styles.card, 
-          ...getMoodStyle(event.mood), 
-          padding: '20px', 
-          marginBottom: '16px',
-          animation: 'newsAlert 0.8s ease-out'
-        }}>
-          <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>📰 {2025 + turn}년 뉴스</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <span style={{ 
-              fontSize: '48px',
-              display: 'inline-block',
-              animation: event.mood === 'good' ? 'zoomPulse 1s infinite' : event.mood === 'danger' ? 'dangerPulse 0.5s infinite' : 'pulse 2s infinite'
-            }}>
-              {event.mood === 'good' ? '📈' : event.mood === 'danger' ? '🚨' : event.mood === 'warning' ? '⚡' : '📰'}
-            </span>
-            <div>
-              <div style={{ fontWeight: 'bold', fontSize: '18px', animation: 'fadeIn 0.5s ease-out 0.3s both' }}>"{event.title}"</div>
-              <div style={{ fontSize: '15px', opacity: 0.9, marginTop: '6px', animation: 'fadeIn 0.5s ease-out 0.5s both' }}>→ {event.effect}</div>
-            </div>
-          </div>
-        </div>
-        
-        {/* 전략 결정 */}
-        <div style={{ ...styles.card, padding: '20px', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <span style={{ fontSize: '16px', fontWeight: 'bold' }}>🎯 전략 결정</span>
-            <div style={{ fontSize: '15px' }}>
-              <span style={{ color: currentBudget < 100 ? '#ef4444' : '#fbbf24', fontWeight: 'bold' }}>💰 {currentBudget}억</span>
-              <span style={{ color: '#4ade80', marginLeft: '12px' }}>+{annualRevenue}억/년</span>
-            </div>
-          </div>
-          
-          {/* 예산 부족 경고 (100억 미만일 때만) */}
-          {currentBudget < 100 && (
-            <div style={{ 
-              backgroundColor: '#7f1d1d', 
-              border: '1px solid #ef4444',
-              borderRadius: '8px', 
-              padding: '12px', 
-              marginBottom: '16px',
-              fontSize: '14px',
-              color: '#fca5a5'
-            }}>
-              ⚠️ 예산 부족! 이번 턴은 투자 없이 수익만 받습니다.
-            </div>
-          )}
-          
-          {/* 분업 전략 */}
-          <div style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '14px', marginBottom: '10px', fontWeight: 'bold' }}>분업 전략</div>
-            <div style={styles.grid3}>
-              {['M1', 'M2', 'M3'].map(m => (
-                <button key={m} onClick={() => setDivision(m)}
-                  style={{ 
-                    ...styles.buttonSecondary, 
-                    ...(division === m ? styles.buttonSelected : {}),
-                    padding: '14px 8px'
-                  }}>
-                  <div style={{ fontWeight: 'bold', fontSize: '18px' }}>{m}</div>
-                  <div style={{ fontSize: '12px', marginTop: '4px' }}>{m === 'M1' ? '울산단독' : m === 'M2' ? '분업' : '부산단독'}</div>
-                  <div style={{ 
-                    fontSize: '10px', 
-                    marginTop: '6px', 
-                    color: division === m ? '#000' : '#94a3b8',
-                    fontWeight: division === m ? 'bold' : 'normal',
-                    lineHeight: '1.3'
-                  }}>
-                    {m === 'M1' && `메탄올 ${fuelRatio}%`}
-                    {m === 'M1' && <br />}
-                    {m === 'M1' && `암모니아 ${100-fuelRatio}%`}
-                    {m === 'M2' && `부산-메탄올 ${fuelRatio}%`}
-                    {m === 'M2' && <br />}
-                    {m === 'M2' && `울산-암모니아 ${100-fuelRatio}%`}
-                    {m === 'M3' && `메탄올 ${fuelRatio}%`}
-                    {m === 'M3' && <br />}
-                    {m === 'M3' && `암모니아 ${100-fuelRatio}%`}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-          
-          {/* 투자 배분 슬라이더 */}
-          <div style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '14px', marginBottom: '10px' }}>
-              <span style={{ fontWeight: 'bold' }}>투자 배분:</span> 메탄올 {fuelRatio}% : 암모니아 {100-fuelRatio}%
-            </div>
-            <input type="range" min="0" max="100" step="25" value={fuelRatio}
-              onChange={(e) => setFuelRatio(Number(e.target.value))} 
-              style={{ width: '100%', height: '8px' }} />
-          </div>
-          
-          {/* 투자 규모 */}
-          <div>
-            <div style={{ fontSize: '14px', marginBottom: '10px', fontWeight: 'bold' }}>투자 규모</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-              {[
-                { key: '없음', label: '없음', cost: 0 },
-                { key: '소', label: '소형', cost: 100 },
-                { key: '중', label: '중형', cost: 300 },
-                { key: '대', label: '대형', cost: 500 }
-              ].map(s => (
-                <button key={s.key} onClick={() => canAfford(s.key) && setInvestSize(s.key)}
-                  style={{ 
-                    ...styles.buttonSecondary, 
-                    ...(investSize === s.key ? styles.buttonSelected : {}),
-                    opacity: canAfford(s.key) ? 1 : 0.4,
-                    cursor: canAfford(s.key) ? 'pointer' : 'not-allowed',
-                    padding: '14px 8px'
-                  }}>
-                  <div style={{ fontWeight: 'bold', fontSize: '16px' }}>{s.label}</div>
-                  <div style={{ fontSize: '13px', marginTop: '4px' }}>{s.cost}억</div>
-                  {!canAfford(s.key) && s.key !== '없음' && (
-                    <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>예산부족</div>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-        
-        {/* 하단 고정 버튼 */}
-        <div style={{ 
-          position: 'fixed', 
-          bottom: 0, 
-          left: 0, 
-          right: 0, 
-          padding: '16px',
-          backgroundColor: '#0f172a',
-          borderTop: '1px solid #1e293b'
-        }}>
-          <button 
-            onClick={canProceed ? executeTurn : undefined} 
-            disabled={!canProceed}
-            style={{ 
-              ...styles.button,
-              opacity: canProceed ? 1 : 0.5,
-              cursor: canProceed ? 'pointer' : 'not-allowed',
-              backgroundColor: canProceed ? '#eab308' : '#6b7280',
-              fontSize: '18px',
-              padding: '18px',
-              borderRadius: '50px'
-            }}
-          >
-            {canProceed ? '내년으로 →' : '⚠️ 투자 규모를 조정하세요'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // 턴 결과
-  if (screen === 'result' && turnResult) {
-    const totalShips = getTotalShips(turn, scenario);
-    const prevTotalShips = getTotalShips(turn - 1, scenario);
-    const newShips = totalShips - prevTotalShips;
-    
-    // 이벤트 영향 표시
-    const eventEffect = getEventShipEffect(turnResult.event);
-    
-    // 각 항만별 선박 변화 계산
-    const getShipChange = (key) => {
-      const prevShipCount = Math.round(prevTotalShips * turnResult.prevShares[key] / 100);
-      const newShipCount = Math.round(totalShips * shares[key] / 100);
-      return newShipCount - prevShipCount;
-    };
-    
-    const koreaShipChange = getShipChange('korea');
-    const isSuccess = koreaShipChange >= 0;
-    
-    // 한국 카드 애니메이션 (결과 크기에 따라 강도 조절, 딜레이 0.8초)
-    const getKoreaAnimation = () => {
-      const absChange = Math.abs(koreaShipChange);
-      if (isSuccess) {
-        if (absChange >= 20) return 'glowLarge 1.5s infinite 0.8s';
-        if (absChange >= 10) return 'glowMedium 2s infinite 0.8s';
-        return 'glowSmall 2.5s infinite 0.8s';
-      } else {
-        if (absChange >= 20) return 'shakeLarge 0.6s ease-in-out 0.8s 3';
-        if (absChange >= 10) return 'shakeMedium 0.8s ease-in-out 0.8s 2';
-        return 'shakeSmall 1s ease-in-out 0.8s 2';
-      }
-    };
-    
-    return (
-      <div style={styles.container}>
-        {/* 제목 - 0초 */}
-        <h2 style={{ 
-          fontSize: '22px', 
-          fontWeight: 'bold', 
-          marginBottom: '16px', 
-          textAlign: 'center'
-        }}>
-          {isSuccess ? '🎉' : '😰'} {turnResult.year}년 결과
-        </h2>
-        
-        {/* 선박 이동 현황 카드 - 고정 위치 */}
-        <div style={{ 
-          ...styles.card, 
-          background: isSuccess 
-            ? 'linear-gradient(135deg, rgba(34,197,94,0.25) 0%, rgba(30,41,59,1) 100%)' 
-            : 'linear-gradient(135deg, rgba(239,68,68,0.25) 0%, rgba(30,41,59,1) 100%)',
-          border: isSuccess ? '2px solid rgba(34,197,94,0.5)' : '2px solid rgba(239,68,68,0.5)'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ fontSize: '16px', fontWeight: 'bold' }}>🚢 급유선박 선택 현황</span>
-            <span style={{ fontSize: '14px', color: '#94a3b8' }}>총 {totalShips.toLocaleString()}척</span>
-          </div>
-          
-          {/* 시장 변화 요약 - 0.3초 후 */}
-          <div style={{ 
-            fontSize: '14px', 
-            color: newShips > 100 ? '#4ade80' : newShips < 50 ? '#f87171' : '#94a3b8',
-            marginBottom: '12px',
-            padding: '10px',
-            backgroundColor: 'rgba(0,0,0,0.3)',
-            borderRadius: '8px'
-          }}>
-            {newShips > 0 ? '📈' : '📉'} 올해 {newShips > 0 ? '+' : ''}{newShips}척 
-            {eventEffect !== 0 && (
-              <span style={{ marginLeft: '8px', color: eventEffect > 0 ? '#4ade80' : '#f87171', fontWeight: 'bold' }}>
-                (이벤트 영향: {eventEffect > 0 ? '+' : ''}{eventEffect})
-              </span>
-            )}
-          </div>
-          
-          {/* 한국 선박 변화 - 0.8초 후 글로우/흔들림 시작 */}
-          <div style={{ 
-            backgroundColor: 'rgba(234,179,8,0.25)', 
-            borderRadius: '12px', 
-            padding: '14px',
-            marginBottom: '12px',
-            border: '2px solid rgba(234,179,8,0.5)',
-            animation: getKoreaAnimation()
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '32px' }}>🇰🇷</span>
-                <div>
-                  <div style={{ fontWeight: 'bold', color: '#eab308', fontSize: '16px' }}>한국</div>
-                  <div style={{ fontSize: '13px', color: '#94a3b8' }}>
-                    {getShipCount(turnResult.prevShare, prevTotalShips)}척 → {getShipCount(turnResult.newShare, totalShips)}척
-                  </div>
-                </div>
-              </div>
-              <div>
-                {/* 선박 페이드 애니메이션 - 1.0초 후 */}
-                <ShipAnimation change={koreaShipChange} delay={1.0} />
-              </div>
-            </div>
-          </div>
-          
-          {/* 다른 항만 선박 변화 - 모바일 대응 */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {['singapore', 'shanghai', 'rotterdam'].map((key, index) => {
-              const shipChange = getShipChange(key);
-              return (
-                <div key={key} style={{ 
-                  backgroundColor: '#374151', 
-                  borderRadius: '10px', 
-                  padding: '10px 14px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <div style={{ fontSize: '14px', color: PORT_COLORS[key], fontWeight: 'bold' }}>
-                    {INITIAL_PORTS[key].flag} {INITIAL_PORTS[key].name}
-                  </div>
-                  <ShipAnimation change={shipChange} delay={1.5 + index * 0.3} />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        
-        {/* 당신의 선택 - 고정 위치 */}
-        <div style={styles.card}>
-          <div style={styles.label}>🇰🇷 당신의 선택</div>
-          <div style={{ fontSize: '14px', marginBottom: '8px' }}>{turnResult.decision.division} / 메탄올 {turnResult.decision.fuelRatio}% / {turnResult.decision.investSize}</div>
-          <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-            투자: -{turnResult.playerInvestCost}억 | 수익: +{turnResult.playerRevenue}억 | 잔액: {ports.korea.budget}억
-          </div>
-        </div>
-        
-        {/* 경쟁국 투자 현황 - 고정 위치 */}
-        <div style={styles.card}>
-          <div style={styles.label}>🌍 경쟁국 투자 현황</div>
-          {['singapore', 'shanghai', 'rotterdam'].map((key, index) => {
-            const action = turnResult.aiActions[key];
-            if (!action) return null;
-            return (
-              <div key={key} style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center',
-                padding: '8px',
-                backgroundColor: '#374151',
-                borderRadius: '8px',
-                marginBottom: '6px'
-              }}>
-                <span style={{ color: PORT_COLORS[key] }}>
-                  {INITIAL_PORTS[key].flag} {INITIAL_PORTS[key].name}
-                </span>
-                <div style={{ fontSize: '12px', textAlign: 'right' }}>
-                  <div>투자: {action.investSize} ({action.investAmount}억)</div>
-                  <div style={{ color: '#4ade80' }}>수익: +{action.revenue}억</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        
-        {/* 경쟁자 추가 반응 - 고정 위치, 2.5초 후 흔들림 */}
-        {turnResult.reactions.length > 0 && (
-          <div style={styles.card}>
-            <div style={styles.label}>⚔️ 경쟁자 특별 반응</div>
-            {turnResult.reactions.map((r, i) => (
-              <div key={i} style={{ 
-                backgroundColor: '#374151', 
-                borderRadius: '12px', 
-                padding: '14px', 
-                marginBottom: '8px',
-                border: '1px solid rgba(239,68,68,0.3)',
-                animation: `shakeMedium 0.8s ease-in-out ${2.5 + i * 0.4}s 2`
-              }}>
-                <div style={{ fontWeight: 'bold', marginBottom: '6px', color: PORT_COLORS[r.port], fontSize: '16px' }}>
-                  {INITIAL_PORTS[r.port].flag} {INITIAL_PORTS[r.port].name}
-                </div>
-                <div style={{ fontSize: '15px' }}>
-                  "{r.action}"
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        
-        {/* 점유율 변화 + 그래프 - 고정 위치, 3.0초 후 숫자 카운트업 */}
-        <div style={styles.card}>
-          <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-            <span style={{ fontSize: '20px', fontWeight: 'bold' }}>
-              한국: {turnResult.prevShare.toFixed(1)}% → <AnimatedNumber value={turnResult.newShare} suffix="%" duration={1500} />
-            </span>
-            <span style={{ 
-              marginLeft: '8px', 
-              fontSize: '18px', 
-              color: turnResult.change >= 0 ? '#4ade80' : '#f87171'
-            }}>
-              ({turnResult.change >= 0 ? '+' : ''}{turnResult.change.toFixed(1)}%p)
-            </span>
-          </div>
-          
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-            <MiniLineChart history={shareHistory} showChange={true} />
-          </div>
-          
-          {Object.keys(shares).sort((a, b) => shares[b] - shares[a]).map((key, index) => (
-            <div key={key} style={{ marginBottom: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '3px' }}>
-                <span style={{ color: PORT_COLORS[key] }}>{INITIAL_PORTS[key].flag} {INITIAL_PORTS[key].name}</span>
-                <span><AnimatedNumber value={shares[key]} suffix="%" duration={1200} /></span>
-              </div>
-              <ProgressBar value={shares[key]} portKey={key} />
-            </div>
-          ))}
-        </div>
-        
-        <button onClick={nextTurn} style={styles.button}>
-          {turn >= 15 ? '최종 결과 보기' : '내년으로 →'}
-        </button>
-      </div>
-    );
-  }
-
-  // 파산 화면
-  if (screen === 'bankrupt') {
-    return (
-      <div style={{ 
-        ...styles.container, 
-        background: 'linear-gradient(180deg, #450a0a 0%, #0f172a 100%)',
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        alignItems: 'center',
-        textAlign: 'center',
-        padding: '32px'
-      }}>
-        <div style={{ fontSize: '80px', marginBottom: '16px' }}>💀</div>
-        <div style={{ 
-          fontSize: '14px', 
-          color: '#ef4444', 
-          letterSpacing: '4px', 
-          marginBottom: '8px' 
-        }}>
-          GAME OVER
-        </div>
-        <h2 style={{ 
-          fontSize: '32px', 
-          fontWeight: 'bold', 
-          color: '#fca5a5',
-          marginBottom: '16px'
-        }}>
-          파산
-        </h2>
-        <p style={{ 
-          fontSize: '16px', 
-          color: '#fecaca',
-          marginBottom: '32px'
-        }}>
-          {bankruptYear}년, 한국 항만은 재정 파탄으로<br/>
-          벙커링 사업에서 철수했습니다.
-        </p>
-        
-        <div style={{ 
-          ...styles.card, 
-          backgroundColor: 'rgba(127, 29, 29, 0.5)',
-          border: '1px solid #ef4444',
-          padding: '24px',
-          marginBottom: '24px',
-          maxWidth: '320px'
-        }}>
-          <div style={{ color: '#fca5a5', marginBottom: '12px' }}>📊 최종 기록</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '14px' }}>
-            <div>
-              <div style={{ color: '#94a3b8' }}>생존 기간</div>
-              <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'white' }}>{turn}년</div>
-            </div>
-            <div>
-              <div style={{ color: '#94a3b8' }}>최종 점유율</div>
-              <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'white' }}>{shares.korea.toFixed(1)}%</div>
-            </div>
-            <div>
-              <div style={{ color: '#94a3b8' }}>총 투자액</div>
-              <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#ef4444' }}>{totalInvested}억</div>
-            </div>
-            <div>
-              <div style={{ color: '#94a3b8' }}>최종 예산</div>
-              <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#ef4444' }}>{ports.korea.budget}억</div>
-            </div>
-          </div>
-        </div>
-        
-        <div style={{ 
-          fontSize: '13px', 
-          color: '#94a3b8',
-          marginBottom: '24px',
-          padding: '16px',
-          backgroundColor: 'rgba(0,0,0,0.3)',
-          borderRadius: '8px'
-        }}>
-          💡 <strong>교훈:</strong> 과도한 투자는 재정 위기를 초래합니다.<br/>
-          점유율과 예산의 균형을 맞추세요.
-        </div>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', width: '100%', maxWidth: '320px' }}>
-          <button onClick={resetGame} style={styles.buttonSecondary}>
-            🔄 처음부터
-          </button>
-          <button onClick={() => setScreen('scenario')} style={styles.button}>
-            🎯 재도전
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // 최종 결과
-  if (screen === 'final') {
-    const { grade, msg, color } = getGrade();
-    const sorted = Object.keys(shares).sort((a, b) => shares[b] - shares[a]);
-    
-    return (
-      <div style={{ 
-        ...styles.container, 
-        background: shares.korea >= 20 ? 'linear-gradient(180deg, #14532d 0%, #0f172a 100%)' : 'linear-gradient(180deg, #581c87 0%, #0f172a 100%)'
-      }}>
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{ fontSize: '14px', color: '#94a3b8', letterSpacing: '3px', marginBottom: '8px' }}>🏁 GAME OVER</div>
-          <h2 style={{ fontSize: '24px', fontWeight: 'bold' }}>2040년 최종 결과</h2>
-        </div>
-        
-        <div style={{ 
-          ...styles.card, 
-          textAlign: 'center', 
-          padding: '32px',
-          border: `2px solid ${color}`,
-          boxShadow: `0 0 30px ${color}40`
-        }}>
-          <div style={{ color: '#94a3b8', marginBottom: '8px' }}>최종 점유율</div>
-          <div style={{ fontSize: '48px', fontWeight: 'bold', marginBottom: '8px', color }}>{shares.korea.toFixed(1)}%</div>
-          <div style={{ fontSize: '28px', marginBottom: '8px' }}>{grade}</div>
-          <div style={{ fontSize: '14px', color: '#94a3b8' }}>{msg}</div>
-          <div style={{ marginTop: '16px', fontSize: '13px', color: '#94a3b8' }}>
-            총 투자: {totalInvested}억원 | 최종 예산: {ports.korea.budget}억원
-          </div>
-        </div>
-        
-        {/* 최종 국가별 현황 */}
-        <div style={styles.card}>
-          <div style={styles.label}>💰 최종 재정 현황</div>
-          {sorted.map((key, i) => (
-            <div key={key} style={{ 
-              display: 'flex', 
-              justifyContent: 'space-between', 
-              padding: '10px 0', 
-              color: key === 'korea' ? '#eab308' : 'white',
-              borderBottom: i < 3 ? '1px solid #374151' : 'none'
-            }}>
-              <span>
-                {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}위`} {INITIAL_PORTS[key].flag} {INITIAL_PORTS[key].name}
-              </span>
-              <div style={{ textAlign: 'right' }}>
-                <span style={{ fontWeight: 'bold' }}>{shares[key].toFixed(1)}%</span>
-                <span style={{ marginLeft: '12px', color: '#fbbf24', fontSize: '12px' }}>{ports[key].budget}억</span>
-              </div>
-            </div>
-          ))}
-        </div>
-        
-        {/* 점유율 추이 그래프 */}
-        <div style={{ ...styles.card, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={styles.label}>📈 15년간 점유율 추이</div>
-          <MiniLineChart history={shareHistory} showChange={true} />
-        </div>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-          <button onClick={resetGame} style={styles.buttonSecondary}>🔄 처음부터</button>
-          <button onClick={() => setScreen('scenario')} style={styles.button}>🎯 다른 시나리오</button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
+  return (h >>> 0) / 4294967296;
 }
+var ok = (state) => ({ ok: true, state });
+var fail = (state, error) => ({ ok: false, state, error });
+var activeProjects = (state) => state.projects.filter((p) => !["operating", "cancelled"].includes(p.status));
+var player = (state) => state.ports.korea;
+var canPlay = (state) => state?.phase === "playing";
+function makeFuel(capacity, availability, simops, ready = true, basePrice = 100) {
+  return { capacity, linkedCapacity: 0, availability, simops, ready, basePrice, assetCount: 0 };
+}
+function makePorts(options) {
+  const cash = MODEL_CONFIG.finance[options.difficulty].cash;
+  const korea = {
+    id: "korea",
+    name: "부산 · 한국 거점",
+    flag: "🇰🇷",
+    profile: "플레이어",
+    asc: -0.08,
+    cash,
+    common: { queue: 0, meter: 0, digital: 0, recognition: 0 },
+    fuels: { methanol: makeFuel(300, 0.66, false), ammonia: makeFuel(0, 0.28, false, false, 112) },
+    maintenance: 0,
+    baseOperatingCost: 18
+  };
+  if (options.scenario === "supply") {
+    korea.common.queue = 2;
+    korea.common.digital = 1;
+    korea.fuels.methanol = makeFuel(95, 0.38, true);
+  }
+  if (options.scenario === "transition") {
+    korea.common.queue = 1;
+    korea.common.meter = 1;
+    korea.fuels.methanol = makeFuel(200, 0.57, true);
+  }
+  const rival = (id, name, flag, profile, asc, budget, common, methanol, ammonia) => ({ id, name, flag, profile, asc, cash: budget, common, fuels: { methanol, ammonia }, maintenance: 0, baseOperatingCost: 24 });
+  return {
+    korea,
+    singapore: rival("singapore", "싱가포르", "🇸🇬", "운영·신뢰 선도형", 0.18, 430, { queue: 2, meter: 2, digital: 2, recognition: 1 }, makeFuel(660, 0.82, true, true, 102), makeFuel(230, 0.66, false, true, 115)),
+    rotterdam: rival("rotterdam", "로테르담", "🇳🇱", "운영·전환형", 0.02, 370, { queue: 2, meter: 1, digital: 1, recognition: 0 }, makeFuel(430, 0.73, true, true, 103), makeFuel(180, 0.6, false, true, 113)),
+    shanghai: rival("shanghai", "상하이", "🇨🇳", "공급 주도형", -0.05, 400, { queue: 1, meter: 0, digital: 0, recognition: 0 }, makeFuel(520, 0.76, false, true, 94), makeFuel(300, 0.7, false, true, 105))
+  };
+}
+function eventFor(year) {
+  const events = {
+    2026: { title: "친환경 급유 시장의 출발", description: "현재 고객이 서비스를 이용하지 못하는 이유부터 살펴보세요.", effects: ["투자 완료 시점과 연료별 준비조건을 확인하세요."] },
+    2027: { title: "전자 증빙을 요구하는 거래 확대", description: "문서와 계량의 차이가 거래 조건에 더 크게 반영됩니다.", trustSensitivity: 1.18, effects: ["신뢰 관련 가격 부담 민감도 ×1.18"] },
+    2028: { title: "짧아진 기항 일정", description: "시간이 빠듯한 선박이 늘어 작업 병행 능력이 중요해집니다.", tightShift: 0.12, effects: ["선박 일정 긴박도 +0.12"] },
+    2029: { title: "울산 연계 공급 점검", description: "연계 공급 경로에 임시 점검이 발생했습니다. 자체 기반의 처리 여력은 유지됩니다.", linkedFactor: 0.72, effects: ["올해 울산 연계 공급능력 28% 감소"] },
+    2030: { title: "메탄올 운항 수요 확대", description: "메탄올 급유 기회가 기본 전망보다 증가합니다.", methanolDemand: 1.12, effects: ["올해 메탄올 잠재 급유 기회 +12%"] },
+    2031: { title: "암모니아 운항 준비 확대", description: "암모니아 수요가 늘지만 별도 운영 준비가 없는 시설은 가동할 수 없습니다.", ammoniaDemand: 1.22, effects: ["올해 암모니아 잠재 급유 기회 +22%"] },
+    2032: { title: "공급 준비도 평가 강화", description: "고객이 필요한 시점에 서비스를 받을 수 있는지를 더 중요하게 봅니다.", readinessWeight: 1.2, effects: ["공급 준비도 선택 가중치 ×1.20"] },
+    2033: { title: "공급자산 발주 경쟁", description: "새 설비와 전용 자산의 발주비가 상승했습니다.", assetCost: 1.15, effects: ["올해 새 공급자산 사업비 +15%"] },
+    2034: { title: "싱가포르 신규 발주 조정", description: "싱가포르가 신규 투자 집행을 일시적으로 줄입니다. 이미 가동 중인 능력은 유지됩니다.", singaporeSpend: 0.55, effects: ["싱가포르의 올해 신규 투자 한도 45% 축소"] },
+    2035: { title: "암모니아 공급가격 변동", description: "암모니아 거래 가격이 높아져 일부 고객이 급유 시점을 조정합니다.", ammoniaPrice: 1.1, effects: ["올해 암모니아 공급가격 지수 +10%"] },
+    2036: { title: "운항 일정 정상화", description: "기항 시간 제약이 완화되어 다른 병목의 상대적 중요성이 높아집니다.", tightShift: -0.1, effects: ["선박 일정 긴박도 −0.10"] },
+    2037: { title: "상호인정 범위 정기 점검", description: "회랑의 인정 범위를 점검하는 동안 거래비용 개선 효과가 일부 줄어듭니다.", recognitionFactor: 0.7, effects: ["올해 상호인정의 거래비용 개선 효과 30% 감소"] },
+    2038: { title: "메탄올 조달가격 상승", description: "가격 조정과 서비스 경쟁력 사이에서 균형을 찾아야 합니다.", methanolPrice: 1.08, effects: ["올해 메탄올 공급가격 지수 +8%"] },
+    2039: { title: "암모니아 수요 추가 확대", description: "가동 중인 연료별 설비와 공급 준비도를 확인하세요.", ammoniaDemand: 1.15, effects: ["올해 암모니아 잠재 급유 기회 +15%"] },
+    2040: { title: "마지막 운영연도", description: "마지막 해 점유율뿐 아니라 전체 기간에 확보한 수요와 재정을 평가합니다.", effects: ["기간 누적 포획률로 최종 성과 평가"] }
+  };
+  return { tightShift: 0, linkedFactor: 1, trustSensitivity: 1, readinessWeight: 1, assetCost: 1, singaporeSpend: 1, recognitionFactor: 1, methanolDemand: 1, ammoniaDemand: 1, methanolPrice: 1, ammoniaPrice: 1, ...events[year] };
+}
+function marketAt(state, year, includeEvent = true) {
+  const t = year - MODEL_CONFIG.firstYear;
+  const path = state.options.transition;
+  const ammoniaShare = path === "ammonia_fast" ? clamp(0.16 + 0.043 * t, 0.16, 0.78) : path === "methanol_long" ? clamp(0.1 + 0.011 * t, 0.1, 0.3) : clamp(0.14 + 0.027 * t, 0.14, 0.56);
+  const wave = t === 0 ? 1 : 1 + (hash(state.options.seed, `market:${year}`) - 0.5) * 0.045;
+  const base = MODEL_CONFIG.baseMarket * (1 + MODEL_CONFIG.annualMarketGrowth) ** t * wave;
+  const event = includeEvent ? eventFor(year) : eventFor(2026);
+  const methanol = base * (1 - ammoniaShare) * event.methanolDemand;
+  const ammonia = base * ammoniaShare * event.ammoniaDemand;
+  return { total: methanol + ammonia, methanol, ammonia, ammoniaShare: 100 * ammonia / (methanol + ammonia) };
+}
+function createGame(options = {}) {
+  const opts = {
+    scenario: hasId(SCENARIOS, options.scenario) ? options.scenario : "window",
+    difficulty: hasId(DIFFICULTIES, options.difficulty) ? options.difficulty : "normal",
+    transition: hasId(TRANSITIONS, options.transition) ? options.transition : "balanced",
+    seed: Number.isFinite(Number(options.seed)) ? Math.trunc(Number(options.seed)) >>> 0 : 20261119
+  };
+  const state = {
+    schemaVersion: 11,
+    modelVersion: MODEL_VERSION,
+    options: opts,
+    year: 2026,
+    phase: "playing",
+    ports: makePorts(opts),
+    projects: [],
+    contracts: [],
+    history: [],
+    decisions: [],
+    discount: 0,
+    actionsUsed: 0,
+    nextProjectId: 1,
+    lastResult: null,
+    lastContext: null,
+    completedThisYear: [],
+    cumulative: { demand: 0, served: 0, investment: 0, refunds: 0, operatingNet: 0, contractRequired: 0, contractServed: 0, penalties: 0 },
+    ledger: { openingCash: MODEL_CONFIG.finance[opts.difficulty].cash, investment: 0, refunds: 0 }
+  };
+  state.initialContext = contextFor(state);
+  return state;
+}
+function projectStatus(project, year) {
+  if (["operating", "cancelled"].includes(project.status)) return project.status;
+  return year <= project.planningUntilYear ? "planning" : "construction";
+}
+function quoteOptions(state, owner = "korea") {
+  const port = state.ports[owner];
+  const options = [];
+  const pending = activeProjects(state).filter((p) => p.ownerId === owner);
+  const make = (spec) => {
+    const cost = roundMoney(spec.cost);
+    let reason = "";
+    if (!canPlay(state)) reason = "캠페인이 종료되었습니다.";
+    else if (spec.blocked) reason = spec.blocked;
+    else if (state.year + spec.leadYears > 2040) reason = "2040년까지 가동할 수 없는 사업입니다.";
+    else if (owner === "korea" && state.actionsUsed >= MODEL_CONFIG.maxActions) reason = "올해 사업 추진 한도를 사용했습니다.";
+    else if (cost > port.cash + 1e-7) reason = "현재 예산이 부족합니다.";
+    options.push({ ...spec, cost, readyYear: state.year + spec.leadYears, available: !reason, reason });
+  };
+  const pendingType = (type, fuel = "common") => pending.some((p) => p.type === type && (p.fuel === fuel || p.extraFuel === fuel));
+  const queue = port.common.queue;
+  make({ id: "queue", type: "queue", category: "coordination", label: "예약·배선 조정", description: "공통 운영 조정을 한 단계 높입니다. 새 연료를 준비해도 이 기반은 유지됩니다.", fuel: "common", route: "", scale: "", cost: 65 + queue * 25, annualCost: 3, leadYears: 1, effectLabel: `운영 조정 ${queue} → ${queue + 1}단계 · 예상 대기 완화`, blocked: queue >= 3 ? "운영 조정이 최고 단계입니다." : pendingType("queue") ? "같은 운영 조정 사업을 준비 중입니다." : "" });
+  for (const fuel of FUEL_IDS) {
+    const f = port.fuels[fuel];
+    make({ id: `readiness:${fuel}`, type: "readiness", category: "operations", label: `${FUEL_LABEL[fuel]} 운영 준비`, description: "대상 연료의 절차·인력·운영 준비를 갖춥니다. 시설의 공급능력은 별도로 필요합니다.", fuel, route: "", scale: "", cost: (fuel === "methanol" ? 65 : 95) * (1 - 0.035 * queue), annualCost: 3, leadYears: 1, effectLabel: "해당 연료의 서비스 실행 가능 · 기존 공통 역량 활용", blocked: f.ready ? "해당 연료의 운영 준비가 완료되어 있습니다." : pendingType("readiness", fuel) ? "같은 연료의 운영 준비가 진행 중입니다." : "" });
+    make({ id: `simops:${fuel}`, type: "simops", category: "operations", label: `${FUEL_LABEL[fuel]} 작업 병행`, description: "화물작업과 급유를 병행할 능력을 준비합니다. 짧은 기항 시간의 제약을 완화합니다.", fuel, route: "", scale: "", cost: fuel === "methanol" ? 110 : 145, annualCost: 5, leadYears: 1, effectLabel: "SIMOPS 도입 · 기항 시간 내 수행 가능성 개선", blocked: f.simops ? "작업 병행 능력을 이미 갖추고 있습니다." : !f.ready ? "이 연료의 운영 준비가 먼저 필요합니다." : pendingType("simops", fuel) ? "같은 작업 병행 사업을 준비 중입니다." : "" });
+    for (const route of [owner === "korea" ? "ulsan_link" : "regional_link", "local"]) for (const scale of ["small", "large"]) {
+      const local = route === "local";
+      const large = scale === "large";
+      const cap = large ? 320 : 145;
+      const baseCost = local ? large ? 310 : 175 : large ? 225 : 115;
+      const annualCost = local ? large ? 9 : 5 : large ? 17 : 10;
+      make({ id: `asset:${fuel}:${route}:${scale}`, type: "asset", category: "supply", label: `${FUEL_LABEL[fuel]} ${local ? "자체 공급기반" : owner === "korea" ? "울산 연계 공급" : "역내 연계 공급"} · ${large ? "대형" : "소형"}`, description: local ? "자체 기반은 준비가 길지만 연계 공급비가 낮습니다. 연료별 운영 준비는 별도입니다." : "연계 기반을 활용해 먼저 가동할 수 있지만 매년 연계비와 해당 경로의 공급 점검 영향을 받습니다.", fuel, route, scale, capacity: cap, availabilityGain: large ? 0.18 : 0.12, cost: baseCost * (fuel === "ammonia" ? 1.12 : 1) * eventFor(state.year).assetCost, annualCost, leadYears: local ? 3 : 2, effectLabel: `공급능력 +${cap}기회/년 · 가용성 개선`, blocked: f.assetCount >= 5 ? "해당 연료의 추가 자산 한도에 도달했습니다." : pendingType("asset", fuel) ? "이 연료의 공급사업이 이미 진행 중입니다." : "" });
+    }
+  }
+  for (const [type, label2, max, baseCost, annualCost] of [["meter", "계량·검증 체계", 2, 60, 3], ["digital", "전자 증빙 체계", 2, 55, 3]]) {
+    const level = port.common[type];
+    make({ id: type, type, category: "trust", label: label2, description: type === "meter" ? "검증 가능한 계량 거래의 범위를 넓혀 거래비용을 낮춥니다." : "전자 기록과 문서 정합성을 높여 거래비용을 낮춥니다. 일부 계약의 조건이 됩니다.", fuel: "common", route: "", scale: "", cost: baseCost + level * 20, annualCost, leadYears: 1, effectLabel: `${label2} ${level} → ${level + 1}단계 · 유효가격의 거래비용 감소`, blocked: level >= max ? "최고 단계입니다." : pendingType(type) ? "같은 사업이 진행 중입니다." : "" });
+  }
+  make({ id: "recognition", type: "recognition", category: "trust", label: "싱가포르 상호인정 협력", description: "상대항과 계량·전자 증빙의 인정 범위를 연결합니다. 모든 선사계약의 필수조건은 아닙니다.", fuel: "common", route: "", scale: "", cost: 85, annualCost: 4, leadYears: 2, effectLabel: "상호인정 적용 · 회랑형 계약에 참여 가능", blocked: port.common.recognition ? "상호인정 협력이 가동 중입니다." : pendingType("recognition") ? "협의가 진행 중입니다." : port.common.meter < 1 || port.common.digital < 1 ? "계량과 전자 증빙을 각각 1단계 이상 가동해야 합니다." : !state.ports.singapore.common.digital ? "상대항의 전자 증빙 준비가 필요합니다." : "" });
+  return options;
+}
+function getProjectOptions(state) {
+  return quoteOptions(state);
+}
+function recordDecision(state, kind, payload, choices = [], before = state) {
+  state.decisions.push({ year: state.year, kind, payload: clone(payload), knownState: { cash: player(before).cash, discount: before.discount, scenario: before.options.scenario, transition: before.options.transition, event: eventFor(before.year).title, portfolio: clone(player(before)), market: marketAt(before, before.year) }, afterDecision: { cash: player(state).cash, discount: state.discount }, alternatives: choices.map((o) => ({ id: o.id, cost: o.cost, readyYear: o.readyYear, available: o.available, reason: o.reason })) });
+}
+function commitProject(state, option, owner) {
+  const p = {
+    id: `p${state.nextProjectId++}`,
+    ownerId: owner,
+    label: option.label,
+    type: option.type,
+    category: option.category,
+    fuel: option.fuel,
+    route: option.route,
+    scale: option.scale,
+    capacity: option.capacity || 0,
+    availabilityGain: option.availabilityGain || 0,
+    cost: option.cost,
+    annualCost: option.annualCost,
+    orderedYear: state.year,
+    readyYear: option.readyYear,
+    planningUntilYear: state.year + Math.max(0, option.leadYears - 2),
+    status: "planning",
+    expanded: false
+  };
+  state.ports[owner].cash = roundMoney(state.ports[owner].cash - option.cost);
+  state.projects.push(p);
+  if (owner === "korea") {
+    state.actionsUsed++;
+    state.ledger.investment = roundMoney(state.ledger.investment + option.cost);
+    state.cumulative.investment = roundMoney(state.cumulative.investment + option.cost);
+  }
+  return p;
+}
+function orderProject(state, optionId) {
+  const choices = quoteOptions(state);
+  const option = choices.find((o) => o.id === optionId);
+  if (!option) return fail(state, "알 수 없는 사업입니다.");
+  if (!option.available) return fail(state, option.reason);
+  const next = clone(state);
+  const project = commitProject(next, option, "korea");
+  recordDecision(next, "order", { optionId, projectId: project.id, cost: project.cost, readyYear: project.readyYear }, choices, state);
+  return ok(next);
+}
+function expansionInfo(state, p) {
+  const extraFuel = p.fuel === "methanol" ? "ammonia" : "methanol";
+  const expandCost = roundMoney(p.cost * 0.72);
+  const expandedReadyYear = p.readyYear + 1;
+  const duplicate = activeProjects(state).some((x) => x.id !== p.id && x.ownerId === "korea" && x.type === "asset" && (x.fuel === extraFuel || x.extraFuel === extraFuel));
+  const canExpand = canPlay(state) && p.ownerId === "korea" && p.type === "asset" && projectStatus(p, state.year) === "planning" && !p.expanded && !duplicate && expandedReadyYear <= 2040 && state.actionsUsed < 2 && player(state).cash >= expandCost && player(state).fuels[extraFuel].assetCount < 5;
+  return { extraFuel, expandCost, expandedReadyYear, canExpand };
+}
+function expandProject(state, projectId) {
+  const p = state.projects.find((p2) => p2.id === projectId);
+  if (!p) return fail(state, "사업을 찾을 수 없습니다.");
+  const info = expansionInfo(state, p);
+  if (!info.canExpand) return fail(state, "계획 단계의 공급사업만 예산·추진 여력·가동기한 안에서 확장할 수 있습니다.");
+  const next = clone(state);
+  const project = next.projects.find((x) => x.id === projectId);
+  project.expanded = true;
+  project.extraFuel = info.extraFuel;
+  project.extraCapacity = Math.round(project.capacity * 0.7);
+  project.extraAvailability = project.availabilityGain * 0.7;
+  project.cost = roundMoney(project.cost + info.expandCost);
+  project.annualCost = roundMoney(project.annualCost * 1.7);
+  project.readyYear = info.expandedReadyYear;
+  project.planningUntilYear++;
+  project.label += ` + ${FUEL_LABEL[info.extraFuel]} 범위 확대`;
+  next.ports.korea.cash = roundMoney(next.ports.korea.cash - info.expandCost);
+  next.ledger.investment = roundMoney(next.ledger.investment + info.expandCost);
+  next.cumulative.investment = roundMoney(next.cumulative.investment + info.expandCost);
+  next.actionsUsed++;
+  recordDecision(next, "expand", { projectId, cost: info.expandCost, readyYear: project.readyYear, extraFuel: info.extraFuel }, [], state);
+  return ok(next);
+}
+function cancellationRefund(state, p) {
+  return roundMoney(p.cost * (projectStatus(p, state.year) === "planning" ? 0.8 : 0.35));
+}
+function cancelProject(state, projectId) {
+  const p = state.projects.find((p2) => p2.id === projectId);
+  if (!canPlay(state) || !p || p.ownerId !== "korea" || ["operating", "cancelled"].includes(p.status)) return fail(state, "준비·공사 중인 내 사업만 취소할 수 있습니다.");
+  const next = clone(state);
+  const refund = cancellationRefund(state, p);
+  next.projects.find((p2) => p2.id === projectId).status = "cancelled";
+  next.ports.korea.cash = roundMoney(next.ports.korea.cash + refund);
+  next.ledger.refunds = roundMoney(next.ledger.refunds + refund);
+  next.cumulative.refunds = roundMoney(next.cumulative.refunds + refund);
+  recordDecision(next, "cancel", { projectId, refund, sunkCost: roundMoney(p.cost - refund) }, [], state);
+  return ok(next);
+}
+var CONTRACTS = [
+  { id: "methanol_foundation", label: "메탄올 정기 운항 약정", fuel: "methanol", volume: 40, startYear: 2029, endYear: 2032, deadlineYear: 2029, offerStart: 2026, offerEnd: 2028, premium: 0.12, penalty: 1.25, needs: { ready: true, simops: true, digital: 1, capacity: 50 }, requirements: ["2029년까지 메탄올 운영 준비·SIMOPS 가동", "전자 증빙 1단계 이상", "공급능력 50기회/년 이상"] },
+  { id: "ammonia_preorder", label: "암모니아 선제 공급 약정", fuel: "ammonia", volume: 45, startYear: 2032, endYear: 2036, deadlineYear: 2032, offerStart: 2028, offerEnd: 2031, premium: 0.16, penalty: 1.4, needs: { ready: true, meter: 1, digital: 1, capacity: 65 }, requirements: ["2032년까지 암모니아 운영 준비 가동", "계량·전자 증빙 각각 1단계 이상", "공급능력 65기회/년 이상"] },
+  { id: "verified_corridor", label: "검증형 메탄올 회랑 약정", fuel: "methanol", volume: 35, startYear: 2034, endYear: 2038, deadlineYear: 2034, offerStart: 2030, offerEnd: 2033, premium: 0.2, penalty: 1.5, needs: { ready: true, simops: true, meter: 1, digital: 2, recognition: 1, capacity: 60 }, requirements: ["2034년까지 메탄올 운영 준비·SIMOPS 가동", "계량 1단계·전자 증빙 2단계", "상호인정 협력 가동", "공급능력 60기회/년 이상"] }
+];
+function getContractOffers(state) {
+  return CONTRACTS.filter((c) => state.year >= c.offerStart && state.year <= c.offerEnd && !state.contracts.some((a) => a.id === c.id)).map((c) => ({ ...clone(c), requirements: [...c.requirements, `운영 중 미수행 1기회당 ${c.penalty.toFixed(2)}억원의 위약금`, "개시 기한에 준비조건 미충족 시 미이행 위약금 1.5배를 지급하고 계약 종료"], penaltyRule: "미수행량 × 기회당 위약금. 개시 기한의 준비조건 미충족은 1.5배 후 종료.", available: canPlay(state), reason: canPlay(state) ? "" : "캠페인이 종료되었습니다." }));
+}
+function acceptContract(state, offerId) {
+  const offer = getContractOffers(state).find((c) => c.id === offerId);
+  if (!offer?.available) return fail(state, "현재 수락할 수 없는 계약입니다.");
+  const next = clone(state);
+  next.contracts.push({ ...clone(offer), acceptedYear: state.year, status: "scheduled", served: 0, required: 0, penalties: 0 });
+  recordDecision(next, "contract", { offerId, volume: offer.volume, deadlineYear: offer.deadlineYear, penalty: offer.penalty }, [], state);
+  return ok(next);
+}
+function setPricePolicy(state, discount) {
+  if (!canPlay(state)) return fail(state, "캠페인이 종료되었습니다.");
+  if (![0, 0.1, 0.2, 0.3].includes(discount)) return fail(state, "할인율은 0·10·20·30% 중에서 선택하세요.");
+  const next = clone(state);
+  next.discount = discount;
+  recordDecision(next, "price", { discount }, [], state);
+  return ok(next);
+}
+function contextFor(state) {
+  return { year: state.year, scenario: state.options.scenario, ports: clone(state.ports), market: marketAt(state, state.year), event: eventFor(state.year), discount: state.discount, contracts: clone(state.contracts) };
+}
+function feasibilityFor(service, tightness) {
+  if (!service.ready || service.capacity <= 0) return 0;
+  const s = service.simops ? 1 : 0;
+  return sigmoid(-0.25 + MODEL_CONFIG.operations.simopsBoost * s - MODEL_CONFIG.operations.schedulePenalty * tightness + MODEL_CONFIG.operations.interaction * s * tightness);
+}
+function serviceFor(context, id, fuel) {
+  const p = context.ports[id];
+  const f = p.fuels[fuel];
+  const e = context.event;
+  const routeFactor = id === "korea" ? e.linkedFactor : 1;
+  const capacity = Math.max(0, f.capacity - f.linkedCapacity * (1 - routeFactor));
+  const availability = clamp(f.availability * (f.capacity > 0 ? capacity / f.capacity : 1), 0.05, 0.97);
+  const supplyRate = Math.max(1, capacity * (0.5 + 0.5 * availability) * (1 + 0.16 * p.common.queue) * (f.simops ? 1.2 : 1));
+  const congestion = clamp(context.market[fuel] * 0.18 / supplyRate, 0, MODEL_CONFIG.operations.congestionCap);
+  const waitingHours = capacity > 0 && f.ready ? MODEL_CONFIG.operations.waitingBase + MODEL_CONFIG.operations.waitingScale * congestion ** MODEL_CONFIG.operations.congestionPower / (1 - congestion + 0.08) : 0;
+  const readiness = f.ready && capacity > 0 ? availability * Math.exp(-0.4 * congestion) : 0;
+  const recognized = p.common.recognition * e.recognitionFactor;
+  const confidence = clamp((p.common.meter * 22 + p.common.digital * 22 + recognized * 12) / 100, 0, 1);
+  const riskPremium = Math.max(2, ((fuel === "methanol" ? 18 : 24) - confidence * (fuel === "methanol" ? 15 : 9)) * e.trustSensitivity);
+  const basePrice = f.basePrice * e[`${fuel}Price`];
+  const discount = id === "korea" ? context.discount : 0;
+  const effectivePrice = basePrice * (1 - discount) + riskPremium;
+  const result = { fuel, label: FUEL_LABEL[fuel], ready: f.ready, simops: f.simops, capacity, physicalCapacity: f.capacity, availability, waitingHours, readiness, riskPremium, effectivePrice, congestion };
+  result.feasibility = feasibilityFor(result, clamp(0.55 + e.tightShift + (context.scenario === "window" ? 0.1 : 0), 0.05, 0.98));
+  return result;
+}
+function requirementsMet(contract, port, service) {
+  const need2 = contract.needs;
+  if (need2.ready && !service.ready) return false;
+  if (need2.simops && !service.simops) return false;
+  if (need2.capacity && service.capacity + 1e-7 < need2.capacity) return false;
+  for (const type of ["meter", "digital", "recognition"]) if (need2[type] && port.common[type] < need2[type]) return false;
+  return true;
+}
+function evaluate(context) {
+  const served = Object.fromEntries(PORT_IDS.map((id) => [id, 0]));
+  const byPortFuel = Object.fromEntries(PORT_IDS.map((id) => [id, {}]));
+  const services = Object.fromEntries(PORT_IDS.map((id) => [id, Object.fromEntries(FUEL_IDS.map((f) => [f, serviceFor(context, id, f)]))]));
+  const byFuel = [];
+  const contractResults = [];
+  let contractPremium = 0;
+  let penalty = 0;
+  for (const fuel of FUEL_IDS) {
+    const demand2 = context.market[fuel];
+    const capacities = Object.fromEntries(PORT_IDS.map((id) => [id, services[id][fuel].ready ? services[id][fuel].capacity : 0]));
+    const fuelServed = Object.fromEntries(PORT_IDS.map((id) => [id, 0]));
+    let remaining = demand2;
+    let contractMissed = 0;
+    for (const c of context.contracts.filter((c2) => c2.fuel === fuel && !["failed", "completed"].includes(c2.status) && context.year >= c2.startYear && context.year <= c2.endYear)) {
+      const reserved = Math.min(remaining, c.volume);
+      remaining -= reserved;
+      const eligible = requirementsMet(c, context.ports.korea, services.korea[fuel]);
+      const supplied = eligible ? Math.min(reserved, capacities.korea) : 0;
+      capacities.korea -= supplied;
+      fuelServed.korea += supplied;
+      const failedDeadline = context.year === c.deadlineYear && !eligible;
+      const shortfall = Math.max(0, c.volume - supplied);
+      const chargedPenalty = roundMoney(shortfall * c.penalty * (failedDeadline ? 1.5 : 1));
+      contractMissed += reserved - supplied;
+      contractPremium += supplied * c.premium;
+      penalty += chargedPenalty;
+      contractResults.push({ id: c.id, label: c.label, required: c.volume, served: supplied, penalty: chargedPenalty, eligible, statusAfter: failedDeadline ? "failed" : context.year === c.endYear ? "completed" : "active", reason: failedDeadline ? "개시 기한의 준비조건을 충족하지 못했습니다." : shortfall > 1e-6 ? "약정 물량 일부를 수행하지 못했습니다." : "이번 연도 약정 물량을 수행했습니다." });
+    }
+    const desired = Object.fromEntries(PORT_IDS.map((id) => [id, 0]));
+    const scheduleSegments = [{ tightness: 0.22, weight: 0.3 }, { tightness: 0.55, weight: 0.4 }, { tightness: 0.86, weight: 0.3 }];
+    const buffers = [{ buffer: 0.2, weight: 0.55 }, { buffer: 0.7, weight: 0.45 }];
+    for (const segment of scheduleSegments) for (const b of buffers) {
+      const tightness = clamp(segment.tightness + context.event.tightShift + (context.scenario === "window" ? 0.1 : 0), 0.05, 0.98);
+      const weights = {};
+      const cfg = MODEL_CONFIG.choice;
+      for (const id of PORT_IDS) {
+        const s = services[id][fuel];
+        if (!s.ready || s.capacity <= 0) {
+          weights[id] = 0;
+          continue;
+        }
+        const utility = context.ports[id].asc - cfg.price * (s.effectivePrice - 100) - cfg.waiting * Math.log1p(s.waitingHours) + cfg.feasibility * feasibilityFor(s, tightness) + cfg.readiness * context.event.readinessWeight * s.readiness - 0.25 * tightness - 0.15 * b.buffer;
+        weights[id] = Math.exp(clamp(utility, -25, 25));
+      }
+      const deferWeight = Math.exp(cfg.deferBase + cfg.deferTightness * tightness + cfg.deferBuffer * b.buffer);
+      const denominator = sum(Object.values(weights)) + deferWeight;
+      const opportunities = remaining * segment.weight * b.weight;
+      for (const id of PORT_IDS) desired[id] += opportunities * weights[id] / denominator;
+    }
+    for (const id of PORT_IDS) {
+      fuelServed[id] += Math.min(desired[id], Math.max(0, capacities[id]));
+      served[id] += fuelServed[id];
+      byPortFuel[id][fuel] = fuelServed[id];
+    }
+    const deferred = Math.max(0, demand2 - sum(Object.values(fuelServed)));
+    byFuel.push({ fuel, label: FUEL_LABEL[fuel], demand: demand2, served: fuelServed.korea, capture: demand2 > 0 ? 100 * fuelServed.korea / demand2 : 0, deferred, capacity: services.korea[fuel].capacity, unserved: Math.max(0, desired.korea - capacities.korea) + contractMissed, portServed: fuelServed });
+  }
+  const demand = context.market.total;
+  const allServed = sum(Object.values(served));
+  return {
+    demand,
+    served: served.korea,
+    capture: demand ? 100 * served.korea / demand : 0,
+    marketShare: allServed ? 100 * served.korea / allServed : 0,
+    deferred: Math.max(0, demand - allServed),
+    competitorServed: allServed - served.korea,
+    byFuel,
+    byPort: served,
+    byPortFuel,
+    services,
+    contractResults,
+    contractPremium: roundMoney(contractPremium),
+    penalty: roundMoney(penalty),
+    allocation: [...PORT_IDS.map((id) => ({ id, label: context.ports[id].name, served: served[id], share: demand ? 100 * served[id] / demand : 0 })), { id: "defer", label: "급유 유보", served: Math.max(0, demand - allServed), share: demand ? 100 * Math.max(0, demand - allServed) / demand : 0 }]
+  };
+}
+function operatingCost(port) {
+  return roundMoney(port.baseOperatingCost + port.maintenance + FUEL_IDS.filter((f) => port.fuels[f].ready).length * 4);
+}
+function contribution(evaluation, context, id) {
+  return roundMoney(sum(FUEL_IDS.map((f) => evaluation.byPortFuel[id][f] * (MODEL_CONFIG.serviceContribution - MODEL_CONFIG.grossServiceRevenue * (id === "korea" ? context.discount : 0) - 0.35 * (context.event[`${f}Price`] - 1)))));
+}
+function decomposition(state, context, current) {
+  const baseline = clone(state.lastContext || state.initialContext);
+  let running = baseline;
+  let prior = evaluate(running).served;
+  const start = prior;
+  const components = [];
+  const step = (id, label2, change) => {
+    change(running);
+    const value = evaluate(running).served;
+    components.push({ id, label: label2, value: value - prior });
+    prior = value;
+  };
+  step("market", "시장 규모·연료 구성", (c) => {
+    c.market = clone(context.market);
+  });
+  step("player", "내 가동 역량·가격", (c) => {
+    c.ports.korea = clone(context.ports.korea);
+    c.discount = context.discount;
+  });
+  step("rivals", "경쟁항 가동 역량", (c) => {
+    for (const id of PORT_IDS.filter((id2) => id2 !== "korea")) c.ports[id] = clone(context.ports[id]);
+  });
+  step("event", "올해 운영·가격 환경", (c) => {
+    c.event = clone(context.event);
+  });
+  step("contracts", "계약과 적용연도", (c) => {
+    c.contracts = clone(context.contracts);
+    c.year = context.year;
+    c.scenario = context.scenario;
+  });
+  const counterfactual = clone(context);
+  counterfactual.ports.korea = clone(baseline.ports.korea);
+  counterfactual.discount = baseline.discount;
+  const withoutChange = evaluate(counterfactual);
+  return {
+    bridge: { start, end: current.served, method: "시장 → 내 역량·가격 → 경쟁항 → 환경 → 계약 순서의 모형 내부 분해. 적용 순서에 따라 항목별 기여는 달라집니다.", components },
+    sources: { fromDeferral: withoutChange.deferred - current.deferred, fromCompetitors: withoutChange.competitorServed - current.competitorServed, playerGain: current.served - withoutChange.served, method: "동일 시장·경쟁항·환경·계약에서 내 이전 역량·가격과 비교한 예상 선택량 변화입니다. 실제 선박의 이동 경로를 추적한 값은 아닙니다." }
+  };
+}
+function diagnose(state, context, evaluation) {
+  const items = [];
+  for (const fuel of FUEL_IDS) {
+    const s = evaluation.services.korea[fuel];
+    const row = evaluation.byFuel.find((r) => r.fuel === fuel);
+    if (!s.ready) items.push({ id: `readiness:${fuel}`, label: `${FUEL_LABEL[fuel]} 운영 준비`, description: `${FUEL_LABEL[fuel]} 잠재수요 ${context.market[fuel].toFixed(0)}기회가 있지만 이 연료의 운영 준비가 없어 수행량이 0입니다.`, severity: "high" });
+    else if (s.capacity <= 0) items.push({ id: `capacity:${fuel}`, label: `${FUEL_LABEL[fuel]} 공급기반`, description: "운영 준비는 갖췄지만 가동 중인 공급능력이 없습니다.", severity: "high" });
+    if (s.ready && s.capacity > 0) {
+      if (row.unserved > 1 || row.served / s.capacity > 0.88) items.push({ id: `capacity:${fuel}`, label: `${FUEL_LABEL[fuel]} 처리 여력`, description: `처리 상한 때문에 약 ${row.unserved.toFixed(1)}기회를 수행하지 못했습니다. 공급사업의 가동 시점을 확인하세요.`, severity: "high" });
+      if (s.feasibility < 0.5) items.push({ id: `window:${fuel}`, label: `${FUEL_LABEL[fuel]} 기항 시간`, description: `대표 일정 조건에서 수행 가능성은 ${(s.feasibility * 100).toFixed(0)}%입니다. 작업 병행 능력이 없는 상태에서는 시설 증설만으로 해결되지 않습니다.`, severity: "high" });
+      if (s.waitingHours > 5) items.push({ id: `queue:${fuel}`, label: `${FUEL_LABEL[fuel]} 대기`, description: `예상 대기 ${s.waitingHours.toFixed(1)}시간입니다. 운영 조정과 공급 준비도를 함께 확인하세요.`, severity: "medium" });
+      if (s.riskPremium > 11) items.push({ id: `trust:${fuel}`, label: `${FUEL_LABEL[fuel]} 거래 조건`, description: `유효가격에 거래비용 지수 ${s.riskPremium.toFixed(1)}가 포함됩니다. 계량·전자 증빙은 이 경로로 작동합니다.`, severity: "medium" });
+    }
+  }
+  for (const c of state.contracts.filter((c2) => c2.status === "scheduled" && c2.deadlineYear - state.year <= 2)) {
+    if (!requirementsMet(c, player(state), evaluation.services.korea[c.fuel])) items.unshift({ id: `contract:${c.id}`, label: `${c.deadlineYear}년 계약 준비`, description: `${c.label}의 준비조건이 아직 충족되지 않았습니다. 새 사업의 가동연도와 계약 기한을 비교하세요.`, severity: "high" });
+  }
+  return items.length ? items : [{ id: "balanced", label: "현재 운영조건 확보", description: "주요 서비스 제약이 완화되었습니다. 미래 연료 수요와 유지비·계약 의무를 함께 살펴보세요.", severity: "low" }];
+}
+function annualResult(state) {
+  const context = contextFor(state);
+  const evaluation = evaluate(context);
+  const finance = {
+    openingCash: state.ledger.openingCash,
+    investment: state.ledger.investment,
+    refunds: state.ledger.refunds,
+    grant: MODEL_CONFIG.finance[state.options.difficulty].grant,
+    serviceContribution: contribution(evaluation, context, "korea"),
+    operatingCost: operatingCost(player(state)),
+    contractPremium: evaluation.contractPremium,
+    penalty: evaluation.penalty
+  };
+  finance.closingCash = roundMoney(finance.openingCash - finance.investment + finance.refunds + finance.grant + finance.serviceContribution - finance.operatingCost + finance.contractPremium - finance.penalty);
+  const breakdown = decomposition(state, context, evaluation);
+  const bottlenecks = diagnose(state, context, evaluation);
+  const explanations = [
+    `잠재 급유 기회 ${evaluation.demand.toFixed(1)} 중 ${evaluation.served.toFixed(1)}을 수행했습니다. 포획률은 ${evaluation.capture.toFixed(2)}%, 실제 급유시장 내 비중은 ${evaluation.marketShare.toFixed(2)}%입니다.`,
+    `정책예산 ${finance.grant.toFixed(0)}억원과 실적 기여이익 ${finance.serviceContribution.toFixed(2)}억원을 구분해 정산합니다. 운영비는 ${finance.operatingCost.toFixed(2)}억원입니다.`,
+    bottlenecks[0].description
+  ];
+  if (state.discount) explanations.push(`할인 ${Math.round(state.discount * 100)}%는 선택확률을 바꾸는 동시에 수행 1기회당 기여이익을 줄입니다. 할인효과가 해마다 가산되는 구조는 아닙니다.`);
+  if (evaluation.penalty) explanations.push(`미이행 약정으로 위약금 ${evaluation.penalty.toFixed(2)}억원이 발생했습니다.`);
+  return {
+    year: state.year,
+    demand: evaluation.demand,
+    served: evaluation.served,
+    capture: evaluation.capture,
+    marketShare: evaluation.marketShare,
+    deferred: evaluation.deferred,
+    competitorServed: evaluation.competitorServed,
+    byFuel: evaluation.byFuel.map(({ portServed, ...r }) => r),
+    allocation: evaluation.allocation,
+    finance,
+    ...breakdown,
+    bottlenecks,
+    completedProjects: clone(state.completedThisYear),
+    aiActions: [],
+    contractResults: evaluation.contractResults.map(({ eligible, statusAfter, ...r }) => r),
+    explanations,
+    _context: context,
+    _evaluation: evaluation
+  };
+}
+function publicResult(result) {
+  const { _context, _evaluation, ...clean } = result;
+  return clean;
+}
+function previewYear(state) {
+  return publicResult(annualResult(state));
+}
+function applyCommission(state, p) {
+  const port = state.ports[p.ownerId];
+  if (p.type === "queue") port.common.queue = Math.min(3, port.common.queue + 1);
+  else if (["meter", "digital"].includes(p.type)) port.common[p.type] = Math.min(2, port.common[p.type] + 1);
+  else if (p.type === "recognition") port.common.recognition = 1;
+  else if (p.type === "readiness") port.fuels[p.fuel].ready = true;
+  else if (p.type === "simops") port.fuels[p.fuel].simops = true;
+  else if (p.type === "asset") {
+    const addAsset = (fuel, capacity, gain) => {
+      const f = port.fuels[fuel];
+      f.capacity += capacity;
+      if (p.route === "ulsan_link" || p.route === "regional_link") f.linkedCapacity += capacity;
+      f.availability = clamp(f.availability + gain, 0.05, 0.97);
+      f.assetCount++;
+    };
+    addAsset(p.fuel, p.capacity, p.availabilityGain);
+    if (p.expanded) addAsset(p.extraFuel, p.extraCapacity, p.extraAvailability);
+  }
+  port.maintenance = roundMoney(port.maintenance + p.annualCost);
+  p.status = "operating";
+}
+function commissionForNewYear(state) {
+  state.completedThisYear = [];
+  for (const p of state.projects) {
+    if (["cancelled", "operating"].includes(p.status)) continue;
+    if (p.readyYear <= state.year) {
+      applyCommission(state, p);
+      if (p.ownerId === "korea") state.completedThisYear.push(p.label);
+    } else p.status = projectStatus(p, state.year);
+  }
+}
+function aiOrders(state) {
+  const actions = [];
+  const difficult = state.options.difficulty;
+  if (difficult === "easy" && (state.year - 2026) % 2 === 1) return actions;
+  for (const id of PORT_IDS.filter((id2) => id2 !== "korea")) {
+    const limit = difficult === "hard" ? 2 : 1;
+    const startCash = state.ports[id].cash;
+    const spendingLimit = startCash * (id === "singapore" ? eventFor(state.year).singaporeSpend : 1);
+    let spent = 0;
+    for (let move = 0; move < limit; move++) {
+      const choices = quoteOptions(state, id).filter((o) => o.available && o.cost + spent <= spendingLimit - 30);
+      if (!choices.length) break;
+      const market = marketAt(state, state.year);
+      const score = (o) => {
+        const port = state.ports[id];
+        let rank = 0;
+        if (o.type === "simops") rank = id === "rotterdam" ? 9 : 7;
+        if (o.type === "queue") rank = id === "singapore" ? 8 : 4;
+        if (o.type === "asset") {
+          const f = port.fuels[o.fuel];
+          rank = 3 + Math.max(0, market[o.fuel] * 0.3 / Math.max(1, f.capacity) - 0.5) * 5 + (id === "shanghai" ? 3 : 0);
+          if (o.scale === "large") rank += 1;
+          if (o.route === "local") rank -= 0.4;
+        }
+        if (["meter", "digital", "recognition"].includes(o.type)) rank = id === "singapore" ? 8 : id === "rotterdam" ? 5 : 2;
+        return rank + hash(state.options.seed, `${state.year}:${id}:${o.id}`) * 0.8;
+      };
+      choices.sort((a, b) => score(b) - score(a));
+      const selected = choices[0];
+      commitProject(state, selected, id);
+      spent += selected.cost;
+      actions.push(`${state.ports[id].name}: ${selected.label} 착수 · ${selected.readyYear}년 가동 예정`);
+    }
+  }
+  return actions;
+}
+function advanceYear(state) {
+  if (!canPlay(state)) return fail(state, "캠페인이 종료되었습니다. 새 캠페인을 시작하세요.");
+  const next = clone(state);
+  const aiActions = aiOrders(next);
+  const result = annualResult(next);
+  result.aiActions = aiActions;
+  const evaluation = result._evaluation;
+  const context = result._context;
+  next.ports.korea.cash = result.finance.closingCash;
+  for (const id of PORT_IDS.filter((id2) => id2 !== "korea")) {
+    next.ports[id].cash = roundMoney(next.ports[id].cash + MODEL_CONFIG.finance[next.options.difficulty].rivalGrant + contribution(evaluation, context, id) - operatingCost(next.ports[id]));
+  }
+  for (const c of next.contracts) {
+    const r = evaluation.contractResults.find((r2) => r2.id === c.id);
+    if (r) {
+      c.required += r.required;
+      c.served += r.served;
+      c.penalties = roundMoney(c.penalties + r.penalty);
+      c.status = r.statusAfter;
+    } else if (next.year > c.endYear && c.status !== "failed") c.status = "completed";
+  }
+  next.cumulative.demand += result.demand;
+  next.cumulative.served += result.served;
+  next.cumulative.operatingNet = roundMoney(next.cumulative.operatingNet + result.finance.serviceContribution + result.finance.contractPremium - result.finance.operatingCost - result.finance.penalty);
+  next.cumulative.contractRequired += sum(evaluation.contractResults.map((r) => r.required));
+  next.cumulative.contractServed += sum(evaluation.contractResults.map((r) => r.served));
+  next.cumulative.penalties = roundMoney(next.cumulative.penalties + result.finance.penalty);
+  next.lastContext = context;
+  next.lastResult = publicResult(result);
+  next.history.push({ year: state.year, capture: result.capture, served: result.served, demand: result.demand, deferred: result.deferred, cash: result.finance.closingCash, finance: clone(result.finance), result: clone(next.lastResult) });
+  recordDecision(next, "settle", { year: state.year, actual: { served: result.served, capture: result.capture, closingCash: result.finance.closingCash }, aiActions }, [], state);
+  if (result.finance.closingCash < 0) next.phase = "bankrupt";
+  else if (state.year >= 2040) next.phase = "complete";
+  else {
+    next.year++;
+    next.actionsUsed = 0;
+    next.ledger = { openingCash: next.ports.korea.cash, investment: 0, refunds: 0 };
+    commissionForNewYear(next);
+  }
+  return ok(next);
+}
+function getDashboard(state) {
+  const context = contextFor(state);
+  const evaluation = evaluate(context);
+  const port = player(state);
+  const market = { ...context.market, forecast: [1, 2, 3].map((delta) => state.year + delta).filter((y) => y <= 2040).map((year) => ({ year, ...marketAt(state, year, false) })) };
+  const projectRows = state.projects.filter((p) => p.ownerId === "korea").map((p) => {
+    const info = expansionInfo(state, p);
+    return { id: p.id, label: p.label, category: p.category, fuel: p.fuel, route: p.route, status: projectStatus(p, state.year), orderedYear: p.orderedYear, readyYear: p.readyYear, cost: p.cost, annualCost: p.annualCost, canExpand: info.canExpand, expandCost: info.expandCost, expandedReadyYear: info.expandedReadyYear, canCancel: canPlay(state) && !["operating", "cancelled"].includes(p.status), refund: ["operating", "cancelled"].includes(p.status) ? 0 : cancellationRefund(state, p) };
+  });
+  const capabilities = [
+    { id: "queue", label: "운영 조정", value: port.common.queue, max: 3, unit: "단계", description: "두 연료가 함께 활용하는 일정·배선 조정", fuel: "common" },
+    { id: "meter", label: "계량·검증", value: port.common.meter, max: 2, unit: "단계", description: "검증 가능한 계량 거래의 범위", fuel: "common" },
+    { id: "digital", label: "전자 증빙", value: port.common.digital, max: 2, unit: "단계", description: "전자 기록과 문서 정합성", fuel: "common" },
+    { id: "recognition", label: "상호인정", value: port.common.recognition, max: 1, unit: "단계", description: "싱가포르와의 인정 범위 연계", fuel: "common" },
+    ...FUEL_IDS.flatMap((f) => [
+      { id: `ready:${f}`, label: `${FUEL_LABEL[f]} 준비`, value: port.fuels[f].ready ? 1 : 0, max: 1, unit: "단계", description: "연료별 운영 준비", fuel: f },
+      { id: `simops:${f}`, label: `${FUEL_LABEL[f]} 병행`, value: port.fuels[f].simops ? 1 : 0, max: 1, unit: "단계", description: "해당 연료의 화물작업·급유 병행", fuel: f }
+    ])
+  ];
+  const service = FUEL_IDS.map((f) => {
+    const s = evaluation.services.korea[f];
+    return { fuel: f, label: FUEL_LABEL[f], ready: s.ready, simops: s.simops, capacity: s.capacity, availability: 100 * s.availability, waitingHours: s.waitingHours, feasibility: 100 * s.feasibility, readiness: 100 * s.readiness, effectivePrice: s.effectivePrice };
+  });
+  const warnings = [];
+  if (state.year >= 2038) warnings.push("종료연도까지 가동할 수 없는 신규 사업은 선택할 수 없습니다.");
+  const unsettled = annualResult(state).finance;
+  if (unsettled.closingCash < 0) warnings.push(`현재 계획대로 결산하면 예산이 ${unsettled.closingCash.toFixed(2)}억원이 되어 파산합니다. 취소 가능한 사업과 계약 부담을 확인하세요.`);
+  if (state.discount >= 0.2) warnings.push("할인은 수요와 함께 실적당 기여이익도 바꿉니다. 예상 결산을 확인하세요.");
+  if (context.event.linkedFactor < 1 && FUEL_IDS.some((f) => port.fuels[f].linkedCapacity > 0)) warnings.push("올해 연계 공급 점검이 내 가동능력에 반영되어 있습니다.");
+  const obligations = state.contracts.filter((c) => c.status === "scheduled");
+  for (const c of obligations) if (!requirementsMet(c, port, evaluation.services.korea[c.fuel])) warnings.push(`${c.deadlineYear}년 ${c.label}: 아직 충족하지 못한 준비조건이 있습니다.`);
+  return {
+    year: state.year,
+    phase: state.phase,
+    turn: state.year - 2025,
+    totalTurns: 15,
+    difficultyLabel: labelFor(DIFFICULTIES, state.options.difficulty),
+    scenarioLabel: labelFor(SCENARIOS, state.options.scenario),
+    transitionLabel: labelFor(TRANSITIONS, state.options.transition),
+    budget: port.cash,
+    discount: state.discount,
+    score: { cumulativeCapture: state.cumulative.demand ? 100 * state.cumulative.served / state.cumulative.demand : 0, cumulativeServed: state.cumulative.served, cumulativeDemand: state.cumulative.demand, contractFulfilment: state.cumulative.contractRequired ? 100 * state.cumulative.contractServed / state.cumulative.contractRequired : 100, totalInvestment: state.cumulative.investment, operatingNet: state.cumulative.operatingNet },
+    market,
+    event: { title: context.event.title, description: context.event.description, effects: clone(context.event.effects) },
+    capabilities,
+    service,
+    projects: projectRows,
+    contracts: state.contracts.map((c) => ({ id: c.id, label: c.label, fuel: c.fuel, status: c.status, startYear: c.startYear, endYear: c.endYear, deadlineYear: c.deadlineYear, volume: c.volume, served: c.served, required: c.required, penalties: c.penalties, requirements: clone(c.requirements) })),
+    competition: PORT_IDS.map((id) => ({ id, name: state.ports[id].name, flag: state.ports[id].flag, profile: state.ports[id].profile, budget: state.ports[id].cash, capture: evaluation.demand ? 100 * evaluation.byPort[id] / evaluation.demand : 0, served: evaluation.byPort[id], capacity: sum(FUEL_IDS.map((f) => evaluation.services[id][f].capacity)), upcoming: activeProjects(state).filter((p) => p.ownerId === id).map((p) => `${p.label} · ${p.readyYear}년`) })),
+    history: state.history.map(({ year, capture, served, demand, deferred, cash }) => ({ year, capture, served, demand, deferred, cash })),
+    lastResult: state.lastResult,
+    actionsRemaining: Math.max(0, MODEL_CONFIG.maxActions - state.actionsUsed),
+    warnings
+  };
+}
+function exportGame(state) {
+  return JSON.stringify({ schemaVersion: 11, modelVersion: MODEL_VERSION, provenance: { model: "research_informed_game_assumptions", papers: RESEARCH_NOTES, config: MODEL_CONFIG, limitations: "No exact-paper-replication claim. Expectation units; capacity overflow deferred; signed counterfactual source estimates." }, state }, null, 2);
+}
+function validFiniteTree(value, depth = 0) {
+  if (depth > 35) return false;
+  if (typeof value === "number") return Number.isFinite(value) && Math.abs(value) < 1e12;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length <= 5e3 && value.every((v) => validFiniteTree(v, depth + 1));
+  if (typeof value === "object") return Object.entries(value).every(([k, v]) => !["__proto__", "prototype", "constructor"].includes(k) && validFiniteTree(v, depth + 1));
+  return false;
+}
+var finiteBetween = (value, min, max) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+var safeText = (value) => typeof value === "string" && value.length <= 2e3;
+var textList = (value) => Array.isArray(value) && value.every(safeText);
+function validPort(p, id) {
+  return p && p.id === id && ["name", "flag", "profile"].every((key) => safeText(p[key])) && finiteBetween(p.cash, -1e8, 1e8) && finiteBetween(p.asc, -30, 30) && finiteBetween(p.maintenance, 0, 1e6) && finiteBetween(p.baseOperatingCost, 0, 1e6) && p.common && Object.entries({ queue: 3, meter: 2, digital: 2, recognition: 1 }).every(([key, max]) => Number.isInteger(p.common[key]) && p.common[key] >= 0 && p.common[key] <= max) && p.fuels && FUEL_IDS.every((f) => {
+    const v = p.fuels[f];
+    return v && typeof v.ready === "boolean" && typeof v.simops === "boolean" && finiteBetween(v.capacity, 0, 1e5) && finiteBetween(v.linkedCapacity, 0, v.capacity) && finiteBetween(v.availability, 1e-3, 1) && finiteBetween(v.basePrice, 1e-3, 1e5) && Number.isInteger(v.assetCount) && v.assetCount >= 0 && v.assetCount <= 5;
+  });
+}
+function validResult(r) {
+  if (!r || !Number.isInteger(r.year) || r.year < 2026 || r.year > 2040) return false;
+  if (!["demand", "served", "deferred", "competitorServed"].every((k) => finiteBetween(r[k], 0, 1e8)) || !["capture", "marketShare"].every((k) => finiteBetween(r[k], 0, 100))) return false;
+  if (!Array.isArray(r.byFuel) || r.byFuel.length !== 2 || !r.byFuel.every((f) => FUEL_IDS.includes(f.fuel) && safeText(f.label) && ["demand", "served", "capture", "deferred", "capacity", "unserved"].every((k) => finiteBetween(f[k], 0, 1e8)))) return false;
+  if (!Array.isArray(r.allocation) || !r.allocation.every((p) => [...PORT_IDS, "defer"].includes(p.id) && safeText(p.label) && finiteBetween(p.served, 0, 1e8) && finiteBetween(p.share, 0, 100))) return false;
+  if (!r.finance || !["openingCash", "investment", "refunds", "grant", "serviceContribution", "operatingCost", "contractPremium", "penalty", "closingCash"].every((k) => finiteBetween(r.finance[k], -1e8, 1e8))) return false;
+  if (!r.bridge || !finiteBetween(r.bridge.start, 0, 1e8) || !finiteBetween(r.bridge.end, 0, 1e8) || !safeText(r.bridge.method) || !Array.isArray(r.bridge.components) || !r.bridge.components.every((c) => safeText(c.id) && safeText(c.label) && finiteBetween(c.value, -1e8, 1e8))) return false;
+  if (!r.sources || !safeText(r.sources.method) || !["fromDeferral", "fromCompetitors", "playerGain"].every((k) => finiteBetween(r.sources[k], -1e8, 1e8))) return false;
+  if (!Array.isArray(r.bottlenecks) || !r.bottlenecks.every((b) => safeText(b.id) && safeText(b.label) && safeText(b.description) && ["low", "medium", "high"].includes(b.severity))) return false;
+  if (!textList(r.completedProjects) || !textList(r.aiActions) || !textList(r.explanations) || !Array.isArray(r.contractResults)) return false;
+  return r.contractResults.every((c) => CONTRACTS.some((spec) => spec.id === c.id) && safeText(c.label) && safeText(c.reason) && ["required", "served", "penalty"].every((k) => finiteBetween(c[k], 0, 1e8)));
+}
+function validContext(c) {
+  if (!c || !Number.isInteger(c.year) || c.year < 2026 || c.year > 2040 || !hasId(SCENARIOS, c.scenario) || ![0, 0.1, 0.2, 0.3].includes(c.discount)) return false;
+  if (!c.ports || !PORT_IDS.every((id) => validPort(c.ports[id], id)) || !c.market || !["total", "methanol", "ammonia", "ammoniaShare"].every((k) => finiteBetween(c.market[k], 0, 1e8))) return false;
+  if (!c.event || !safeText(c.event.title) || !safeText(c.event.description) || !textList(c.event.effects)) return false;
+  if (!Object.entries(eventFor(c.year)).filter(([, v]) => typeof v === "number").every(([k]) => finiteBetween(c.event[k], -1, 10))) return false;
+  return Array.isArray(c.contracts) && c.contracts.every((contract) => validContract(contract, c.year));
+}
+function validProject(p, state) {
+  if (!p || !/^p[1-9]\d*$/.test(p.id) || Number(p.id.slice(1)) >= state.nextProjectId || !PORT_IDS.includes(p.ownerId) || !safeText(p.label)) return false;
+  const category = { queue: "coordination", readiness: "operations", simops: "operations", asset: "supply", meter: "trust", digital: "trust", recognition: "trust" }[p.type];
+  if (!category || p.category !== category || !["planning", "construction", "operating", "cancelled"].includes(p.status) || typeof p.expanded !== "boolean") return false;
+  if (!Number.isInteger(p.orderedYear) || p.orderedYear < 2026 || p.orderedYear > state.year || !Number.isInteger(p.readyYear) || p.readyYear > 2040 || !Number.isInteger(p.planningUntilYear)) return false;
+  if (!finiteBetween(p.cost, 0, 1e6) || !finiteBetween(p.annualCost, 0, 1e5) || !finiteBetween(p.capacity, 0, 1e5) || !finiteBetween(p.availabilityGain, 0, 1)) return false;
+  const asset = p.type === "asset";
+  const fuelSpecific = asset || ["readiness", "simops"].includes(p.type);
+  if (fuelSpecific ? !FUEL_IDS.includes(p.fuel) : p.fuel !== "common") return false;
+  if (asset) {
+    if (!["small", "large"].includes(p.scale) || !["local", p.ownerId === "korea" ? "ulsan_link" : "regional_link"].includes(p.route) || p.capacity <= 0) return false;
+    if (p.capacity !== (p.scale === "large" ? 320 : 145) || p.availabilityGain !== (p.scale === "large" ? 0.18 : 0.12)) return false;
+    if (p.expanded) {
+      if (p.ownerId !== "korea" || !FUEL_IDS.includes(p.extraFuel) || p.extraFuel === p.fuel || p.extraCapacity !== Math.round(p.capacity * 0.7) || p.extraAvailability !== p.availabilityGain * 0.7) return false;
+    } else if (p.extraFuel !== void 0 || p.extraCapacity !== void 0 || p.extraAvailability !== void 0) return false;
+  } else if (p.route !== "" || p.scale !== "" || p.capacity !== 0 || p.availabilityGain !== 0 || p.expanded || p.extraFuel !== void 0 || p.extraCapacity !== void 0 || p.extraAvailability !== void 0) return false;
+  const baseLead = asset ? p.route === "local" ? 3 : 2 : p.type === "recognition" ? 2 : 1;
+  if (p.readyYear !== p.orderedYear + baseLead + Number(p.expanded) || p.planningUntilYear !== p.orderedYear + Math.max(0, baseLead - 2) + Number(p.expanded)) return false;
+  if (p.status === "operating" && p.readyYear > state.year) return false;
+  if (["planning", "construction"].includes(p.status) && (p.readyYear <= state.year || p.status !== projectStatus(p, state.year))) return false;
+  return true;
+}
+function validContract(c, year) {
+  const spec = CONTRACTS.find((o) => o.id === c?.id);
+  if (!spec || !safeText(c.label) || !["scheduled", "active", "failed", "completed"].includes(c.status)) return false;
+  for (const key of ["fuel", "volume", "startYear", "endYear", "deadlineYear", "offerStart", "offerEnd", "premium", "penalty"]) if (c[key] !== spec[key]) return false;
+  if (!c.needs || Object.keys(c.needs).length !== Object.keys(spec.needs).length || !Object.entries(spec.needs).every(([k, v]) => c.needs[k] === v)) return false;
+  if (!Array.isArray(c.requirements) || !c.requirements.length || !c.requirements.every(safeText)) return false;
+  if (!Number.isInteger(c.acceptedYear) || c.acceptedYear < spec.offerStart || c.acceptedYear > spec.offerEnd || c.acceptedYear > year) return false;
+  const maxRequired = spec.volume * (spec.endYear - spec.startYear + 1);
+  if (!finiteBetween(c.required, 0, maxRequired) || !finiteBetween(c.served, 0, c.required) || !finiteBetween(c.penalties, 0, maxRequired * spec.penalty * 1.5)) return false;
+  if (c.status === "scheduled" && (c.required !== 0 || c.served !== 0 || c.penalties !== 0)) return false;
+  return true;
+}
+function validState(s) {
+  if (!s || s.schemaVersion !== 11 || s.modelVersion !== MODEL_VERSION || !Number.isInteger(s.year) || s.year < 2026 || s.year > 2040 || !["playing", "complete", "bankrupt"].includes(s.phase)) return false;
+  if (!s.options || !hasId(SCENARIOS, s.options.scenario) || !hasId(DIFFICULTIES, s.options.difficulty) || !hasId(TRANSITIONS, s.options.transition) || !Number.isInteger(s.options.seed)) return false;
+  if (![0, 0.1, 0.2, 0.3].includes(s.discount) || !Number.isInteger(s.actionsUsed) || s.actionsUsed < 0 || s.actionsUsed > 2 || !Number.isInteger(s.nextProjectId) || s.nextProjectId < 1) return false;
+  if (!s.ports || !PORT_IDS.every((id) => validPort(s.ports[id], id))) return false;
+  if (!Array.isArray(s.projects) || s.projects.length > 200 || !Array.isArray(s.contracts) || s.contracts.length > CONTRACTS.length || !Array.isArray(s.history) || s.history.length > 15 || !Array.isArray(s.decisions) || s.decisions.length > 5e3 || !Array.isArray(s.completedThisYear)) return false;
+  if (!s.ledger || !["openingCash", "investment", "refunds"].every((k) => typeof s.ledger[k] === "number") || !s.cumulative || !["demand", "served", "investment", "refunds", "operatingNet", "contractRequired", "contractServed", "penalties"].every((k) => typeof s.cumulative[k] === "number")) return false;
+  if (!validContext(s.initialContext) || s.lastContext !== null && !validContext(s.lastContext)) return false;
+  if (!textList(s.completedThisYear) || s.lastResult !== null && !validResult(s.lastResult)) return false;
+  if (!s.history.every((h) => h && Number.isInteger(h.year) && h.year >= 2026 && h.year <= 2040 && ["capture", "served", "demand", "deferred"].every((k) => finiteBetween(h[k], 0, 1e8)) && finiteBetween(h.cash, -1e8, 1e8) && validResult(h.result))) return false;
+  if (new Set(s.projects.map((p) => p.id)).size !== s.projects.length || new Set(s.contracts.map((c) => c.id)).size !== s.contracts.length) return false;
+  if (!s.projects.every((p) => validProject(p, s))) return false;
+  if (!s.contracts.every((c) => validContract(c, s.year))) return false;
+  return true;
+}
+function importGame(jsonString) {
+  try {
+    if (typeof jsonString !== "string" || jsonString.length > 8 * 1024 * 1024) return fail(null, "저장 파일은 8MB 이하의 JSON 텍스트여야 합니다.");
+    const parsed = JSON.parse(jsonString);
+    const state = parsed?.state || parsed;
+    if (!validFiniteTree(parsed) || !validState(state)) return fail(null, "v11 저장 형식이나 수치 범위가 맞지 않습니다. v10 저장 파일은 불러올 수 없습니다.");
+    const trial = clone(state);
+    const view = getDashboard(trial);
+    if (!validFiniteTree(view) || !Number.isFinite(previewYear(trial).served)) return fail(null, "저장 파일의 계산 상태를 확인할 수 없습니다.");
+    return ok(trial);
+  } catch {
+    return fail(null, "올바른 v11 저장 파일을 선택하세요. 기존 진행 상태는 유지됩니다.");
+  }
+}
+
+// src/HarborScene.jsx
+import React2, { useEffect, useId as useId2, useMemo, useRef, useState } from "react";
+
+// src/harbor-view.mjs
+var clamp2 = (v, min, max) => Math.min(max, Math.max(min, v));
+var label = (fuel) => fuel === "methanol" ? "메탄올" : "암모니아";
+var point = (u, v) => ({ x: 800 + (u - v) * 0.9, y: 260 + (u + v) * 0.45 });
+var anchor = {
+  control: { u: 160, v: 72 },
+  trust: { u: 370, v: 72 },
+  methanol: { u: 110, v: 315 },
+  ammonia: { u: 650, v: 290 },
+  operations: { u: 420, v: 330 },
+  link: { u: 655, v: 68 },
+  anchorage: { u: 390, v: 800 }
+};
+function zoneIdForProject(p) {
+  if (p.category === "coordination") return "control";
+  if (p.category === "trust") return "trust";
+  if (p.category === "operations") return "operations";
+  return p.fuel === "ammonia" ? "ammonia" : "methanol";
+}
+function deriveHarbor(state) {
+  const dashboard = getDashboard(state);
+  const result = state.phase === "playing" ? previewYear(state) : state.lastResult || previewYear(state);
+  const services = Object.fromEntries(dashboard.service.map((s) => [s.fuel, s]));
+  const cap = Object.fromEntries(dashboard.capabilities.map((c) => [c.id, c.value]));
+  const supplyDescription = (fuel) => `${label(fuel)} 공급능력 ${services[fuel].capacity.toFixed(0)}기회/년 · ${services[fuel].ready ? "운영 준비 완료" : "운영 준비 필요"}`;
+  const zones = [
+    { id: "control", label: "운항 조정실", category: "coordination", fuel: "common", active: cap.queue > 0, status: cap.queue > 0 ? "operating" : "basic", description: `공통 운영 조정 ${cap.queue}단계 · 예약과 배선 관리` },
+    { id: "methanol", label: "메탄올 터미널", category: "supply", fuel: "methanol", active: services.methanol.ready && services.methanol.capacity > 0, status: services.methanol.ready && services.methanol.capacity > 0 ? "operating" : "unprepared", description: supplyDescription("methanol") },
+    { id: "ammonia", label: "암모니아 예정지", category: "supply", fuel: "ammonia", active: services.ammonia.ready && services.ammonia.capacity > 0, status: services.ammonia.ready && services.ammonia.capacity > 0 ? "operating" : "unprepared", description: supplyDescription("ammonia") },
+    { id: "operations", label: "작업 병행 부두", category: "operations", fuel: "all", active: services.methanol.simops || services.ammonia.simops, status: services.methanol.simops || services.ammonia.simops ? "operating" : "basic", description: `메탄올 SIMOPS ${services.methanol.simops ? "가동" : "미준비"} · 암모니아 SIMOPS ${services.ammonia.simops ? "가동" : "미준비"}` },
+    { id: "trust", label: "거래·인증 센터", category: "trust", fuel: "common", active: cap.meter + cap.digital + cap.recognition > 0, status: cap.recognition > 0 ? "recognized" : cap.meter + cap.digital > 0 ? "operating" : "basic", description: `계량 ${cap.meter} · 전자 증빙 ${cap.digital} · 상호인정 ${cap.recognition}단계` },
+    { id: "link", label: "울산 공급 연결", category: "supply", fuel: "all", active: state.ports.korea.fuels.methanol.linkedCapacity + state.ports.korea.fuels.ammonia.linkedCapacity > 0, status: "link", description: "지역 공급기반과 연결하는 사업 · 가동 시점과 연계 운영비 확인" },
+    { id: "anchorage", label: "바깥바다의 선택", category: "operations", fuel: "all", active: true, status: "market", description: `시장 급유 유보 ${result.deferred.toFixed(1)}기회/년 · 부산의 접안 대기 척수가 아닙니다.` }
+  ].map((z) => ({ ...z, ...anchor[z.id], ...point(anchor[z.id].u, anchor[z.id].v) }));
+  if (zones.find((z) => z.id === "ammonia").active) zones.find((z) => z.id === "ammonia").label = "암모니아 터미널";
+  const byZone = {};
+  const projects = dashboard.projects.filter((p) => p.status !== "cancelled").map((p) => {
+    const zoneId = zoneIdForProject(p);
+    const slot = byZone[zoneId] || 0;
+    byZone[zoneId] = slot + 1;
+    const base = anchor[zoneId];
+    const source = state.projects.find((source2) => source2.id === p.id);
+    const offset = p.category === "supply" ? { u: -50 + slot % 3 * 48, v: -120 + Math.floor(slot / 3) * 55 } : { u: slot % 3 * 42 - 45, v: 65 + Math.floor(slot / 3) * 35 };
+    const u = base.u + offset.u, v = base.v + offset.v;
+    return { ...p, zoneId, u, v, ...point(u, v), progress: p.status === "operating" ? 1 : clamp2((state.year - p.orderedYear) / (p.readyYear - p.orderedYear), 0, 1), expanded: Boolean(source?.expanded), extraFuel: source?.extraFuel || null };
+  });
+  const ships = [];
+  for (const row of result.byFuel) {
+    const fuel = row.fuel;
+    const serviceCount = row.served > 0 ? row.served >= 200 ? 2 : 1 : 0;
+    for (let i = 0; i < serviceCount; i++) {
+      const coords = fuel === "methanol" ? [{ u: 205, v: 520 }, { u: 255, v: 815 }][i] : [{ u: 755, v: 510 }, { u: 835, v: 700 }][i];
+      ships.push({ id: `${fuel}-service-${i}`, fuel, flow: "service", representedOpportunities: row.served / serviceCount, label: `${label(fuel)} 급유 흐름 · 연간 ${(row.served / serviceCount).toFixed(1)}기회를 대표`, ...coords, ...point(coords.u, coords.v), docked: i === 0 });
+    }
+    if (row.deferred > 0) {
+      const coords = fuel === "methanol" ? { u: 340, v: 800 } : { u: 950, v: 450 };
+      ships.push({ id: `${fuel}-deferred`, fuel, flow: "deferred", representedOpportunities: row.deferred, label: `${label(fuel)} 시장 유보 흐름 · 연간 ${row.deferred.toFixed(1)}기회를 대표`, ...coords, ...point(coords.u, coords.v), docked: false });
+    }
+  }
+  const alerts = (result.bottlenecks || []).map((b) => {
+    let zoneId = "control";
+    if (b.id.startsWith("readiness:")) zoneId = b.id.endsWith("ammonia") ? "ammonia" : "methanol";
+    else if (b.id.startsWith("capacity:")) zoneId = b.id.endsWith("ammonia") ? "ammonia" : "methanol";
+    else if (b.id.startsWith("window:")) zoneId = "operations";
+    else if (b.id.startsWith("trust:") || b.id.startsWith("contract:")) zoneId = "trust";
+    return { ...b, zoneId };
+  });
+  const milestones = [
+    { id: "commission", label: "첫 사업 가동", complete: projects.some((p) => p.status === "operating"), description: "주문한 사업을 실제 가동까지 연결하세요." },
+    { id: "simops", label: "메탄올 동시작업", complete: services.methanol.simops, description: "기항 시간 안에 화물작업과 급유를 함께 수행할 준비." },
+    { id: "dual", label: "두 연료 운영", complete: services.methanol.ready && services.methanol.capacity > 0 && services.ammonia.ready && services.ammonia.capacity > 0, description: "메탄올과 암모니아의 준비·공급능력을 모두 확보하세요." },
+    { id: "contract", label: "선사와의 약속 이행", complete: dashboard.contracts.some((c) => c.served > 0), description: "수락한 약정 물량을 실제로 수행하세요." }
+  ];
+  const dual = milestones.find((m) => m.id === "dual").complete;
+  const stage = cap.recognition > 0 && milestones.find((m) => m.id === "contract").complete ? { label: "회랑을 연결하는 항만", description: "가동 중인 상호인정과 실제 약정 이행" } : dual ? { label: "두 연료가 만나는 항만", description: "메탄올·암모니아의 운영 준비와 공급기반 확보" } : services.methanol.simops ? { label: "작업이 이어지는 항만", description: "메탄올 작업 병행 능력을 가동 중" } : { label: "가능성을 준비하는 항만", description: "가동할 역량의 순서가 다음 기회를 만듭니다" };
+  return { zones, projects, ships, alerts, milestones, stage };
+}
+
+// src/harbor-life.mjs
+var clamp3 = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+var sum2 = (values) => values.reduce((a, b) => a + b, 0);
+var mean = (values) => values.length ? sum2(values) / values.length : 0;
+var number = (v, places = 1) => Number(v || 0).toLocaleString("ko-KR", { maximumFractionDigits: places });
+var signed = (v) => (v > 0 ? "+" : "") + number(v);
+var net = (row) => {
+  const f = row.finance || row.result?.finance;
+  return f ? f.serviceContribution + f.contractPremium - f.operatingCost - f.penalty : 0;
+};
+var FUELS2 = { methanol: "메탄올", ammonia: "암모니아" };
+var LIFE = {
+  opening: { label: "새 출발 항만", decor: { workers: 3, trucks: 1, stalls: 1, flowers: false, flags: false, wear: 0.08, brightness: 0.96 } },
+  quiet: { label: "한산한 항만", decor: { workers: 2, trucks: 1, stalls: 1, flowers: false, flags: false, wear: 0.35, brightness: 0.78 } },
+  steady: { label: "활기찬 항만", decor: { workers: 6, trucks: 3, stalls: 2, flowers: true, flags: false, wear: 0, brightness: 1 } },
+  thriving: { label: "번성하는 항만", decor: { workers: 10, trucks: 5, stalls: 3, flowers: true, flags: true, wear: 0, brightness: 1 } },
+  struggling: { label: "침체된 항만", decor: { workers: 1, trucks: 0, stalls: 0, flowers: false, flags: false, wear: 0.85, brightness: 0.64 } },
+  closed: { label: "운영이 멈춘 항만", decor: { workers: 0, trucks: 0, stalls: 0, flowers: false, flags: false, wear: 1, brightness: 0.45 } }
+};
+function measuredLife(history, bankrupt = false) {
+  if (!history.length) return { id: bankrupt ? "closed" : "opening", score: bankrupt ? 0 : 42, operatingNet: null, served: null, capture: null, previousServed: null, trend: "flat" };
+  const recent = history.slice(-2), previous = history.slice(-4, -2);
+  const operatingNet = mean(recent.map(net));
+  const served = mean(recent.map((h) => h.served));
+  const capture = 100 * sum2(recent.map((h) => h.served)) / Math.max(1, sum2(recent.map((h) => h.demand)));
+  const previousServed = previous.length ? mean(previous.map((h) => h.served)) : null;
+  const trend = previousServed === null ? "flat" : served > previousServed * 1.1 ? "up" : served < previousServed * 0.9 ? "down" : "flat";
+  const score = Math.round(100 * (0.5 * clamp3((operatingNet + 20) / 60, 0, 1) + 0.3 * clamp3(capture / 18, 0, 1) + 0.2 * clamp3(served / 260, 0, 1)));
+  const sustainedLoss = recent.length === 2 && recent.every((h) => net(h) < 0) && operatingNet <= -5;
+  const id = bankrupt ? "closed" : sustainedLoss ? "struggling" : recent.length === 2 && operatingNet >= 15 && served >= 170 && capture >= 10 && recent.every((h) => net(h) > 0) ? "thriving" : score >= 40 && operatingNet >= 0 ? "steady" : "quiet";
+  return { id, score: bankrupt ? 0 : score, operatingNet, served, capture, previousServed, trend };
+}
+function deriveHarborLife(state) {
+  const history = state.history || [];
+  const m = measuredLife(history, state.phase === "bankrupt");
+  const recentCount = Math.min(2, history.length);
+  const asOfYear = history.at(-1)?.year ?? null;
+  const reason = m.id === "closed" ? "결산 후 자금이 부족해 운영이 중단되었습니다." : m.id === "opening" ? "첫 결산을 기다리고 있어요. 계획을 세우고 올해 운영을 시작해보세요." : m.id === "struggling" ? "최근 2년 연속 운영 적자입니다. 항만 주변의 상점과 차량이 줄어들었어요." : m.id === "thriving" ? "급유 실적과 운영 흑자가 함께 쌓여 항만 주변까지 활기가 번졌어요." : m.id === "steady" ? "실제 급유와 운영 흑자가 항만의 일상을 움직이고 있어요." : "아직 항만이 충분한 활기를 얻지 못했어요. 고객이 머물 수 있는 조건을 살펴보세요.";
+  return {
+    id: m.id,
+    label: LIFE[m.id].label,
+    score: m.score,
+    asOfYear,
+    settledYears: history.length,
+    caption: asOfYear === null ? "첫 결산 전" : `${asOfYear}년까지 최근 ${recentCount}년 실제 실적`,
+    reason,
+    trend: m.trend,
+    metrics: { operatingNet: m.operatingNet, served: m.served, capture: m.capture, previousServed: m.previousServed },
+    drivers: asOfYear === null ? [{ label: "아직 실적이 없어요", value: "첫 운영 전", text: "계획과 전망이 아닌 실제 결산으로 마을의 활기가 달라집니다." }] : [
+      { label: "연평균 운영 수지", value: `${signed(m.operatingNet)}억`, text: "실적 기여이익 + 계약 프리미엄 − 운영비 − 위약금. 투자비와 정책예산은 제외합니다." },
+      { label: "연평균 급유 수행", value: `${number(m.served)}기회`, text: "최근 실제 급유 활동입니다. 장면의 사람·차량은 상징적인 활기 표현입니다." },
+      { label: "잠재시장 포획률", value: `${number(m.capture)}%`, text: "최근 실제 수행량 ÷ 같은 기간 잠재수요. 현금 잔액만으로 번성하지 않습니다." }
+    ],
+    decor: { ...LIFE[m.id].decor }
+  };
+}
+function finishQuest(spec) {
+  const done = spec.steps.filter((s) => s.complete).length;
+  const progress = spec.status === "complete" ? 100 : spec.progress ?? Math.round(100 * done / Math.max(1, spec.steps.length));
+  return { why: "", rewardLabel: "성장 배지", action: null, ...spec, progress, progressLabel: spec.progressLabel || `${done} / ${spec.steps.length}단계` };
+}
+function currentPending(state) {
+  return state.projects.filter((p) => p.ownerId === "korea" && !["cancelled", "operating"].includes(p.status));
+}
+function need(state, kind, fuel = "common", target = 1) {
+  const p = state.ports.korea;
+  const value = kind === "asset" ? p.fuels[fuel].capacity : kind === "readiness" ? Number(p.fuels[fuel].ready) : kind === "simops" ? Number(p.fuels[fuel].simops) : p.common[kind];
+  const label2 = kind === "asset" ? `${FUELS2[fuel]} 공급능력 ${target}기회/년 이상 가동` : kind === "readiness" ? `${FUELS2[fuel]} 운영 준비 가동` : kind === "simops" ? `${FUELS2[fuel]} 작업 병행 가동` : `${{ queue: "운영 조정", meter: "계량·검증", digital: "전자 증빙", recognition: "상호인정" }[kind]} ${target}단계 가동`;
+  const matches = (project) => project.type === kind && (fuel === "common" || project.fuel === fuel || project.extraFuel === fuel);
+  const pending = currentPending(state).filter(matches).sort((a, b) => a.readyYear - b.readyYear)[0];
+  const pendingGain = !pending ? 0 : kind === "asset" ? pending.fuel === fuel ? pending.capacity : pending.extraCapacity : 1;
+  return { id: `${kind}:${fuel}:${target}`, kind, fuel, target, value, label: label2, met: value >= target, pending, covered: value + pendingGain >= target, matches, zoneId: kind === "queue" ? "control" : ["meter", "digital", "recognition"].includes(kind) ? "trust" : fuel === "ammonia" ? "ammonia" : kind === "asset" ? "methanol" : "operations" };
+}
+function optionsFor(n4, options) {
+  return options.filter((o) => o.type === n4.kind && (n4.fuel === "common" || o.fuel === n4.fuel)).sort((a, b) => a.leadYears - b.leadYears || a.cost - b.cost);
+}
+function earliestReadyYear(state, n4, options) {
+  if (n4.met) return state.year;
+  if (n4.pending && n4.covered) return n4.pending.readyYear;
+  const candidates = optionsFor(n4, options);
+  if (!candidates.length) return Infinity;
+  const lead = Math.min(...candidates.map((o) => o.leadYears));
+  const nextOrderYear = state.year + (state.actionsUsed >= 2 ? 1 : 0);
+  if (n4.kind === "simops" && !state.ports.korea.fuels[n4.fuel].ready) return Math.max(nextOrderYear, earliestReadyYear(state, need(state, "readiness", n4.fuel), options)) + lead;
+  if (n4.kind === "recognition") return Math.max(nextOrderYear, earliestReadyYear(state, need(state, "meter"), options), earliestReadyYear(state, need(state, "digital"), options)) + lead;
+  if (["meter", "digital", "queue"].includes(n4.kind)) {
+    const left = Math.max(0, n4.target - n4.value - (n4.pending ? 1 : 0));
+    return Math.max(nextOrderYear, n4.pending?.readyYear || state.year) + left * lead;
+  }
+  if (n4.kind === "asset" && n4.pending && !n4.covered) return Math.max(nextOrderYear, n4.pending.readyYear) + lead;
+  return nextOrderYear + lead;
+}
+function actionForNeeds(state, needs, options, deadline = 2040) {
+  const unmet = needs.filter((n4) => !n4.met);
+  if (!unmet.length) return { status: "waiting", note: "조건을 갖췄어요. 운영 실적으로 확인해보세요.", action: { type: "advance", label: "올해 운영으로 확인" } };
+  const late = unmet.find((n4) => n4.pending && n4.pending.readyYear > deadline);
+  if (late) return { status: "active", note: `진행 중인 사업은 ${late.pending.readyYear}년 가동 예정으로 ${deadline}년 기한보다 늦습니다.`, zoneId: late.zoneId, action: { type: "projects", projectId: late.pending.id, label: "늦어진 공사 일정 확인" }, secondaryAction: { type: "contracts", label: "약정과 위약금 확인" } };
+  const outstanding = unmet.filter((n4) => !(n4.pending && n4.covered)).sort((a, b) => Number(b.kind === "asset") - Number(a.kind === "asset"));
+  const impossible = unmet.find((n4) => earliestReadyYear(state, n4, options) > deadline);
+  if (impossible) {
+    const earliest = earliestReadyYear(state, impossible, options);
+    return { status: "locked", note: `${impossible.label} 조건은 ${Number.isFinite(earliest) ? "빠르면 " + earliest + "년 가동으로 " : ""}${deadline}년 기한에 맞추기 어렵습니다.`, zoneId: impossible.zoneId, action: deadline < 2040 ? { type: "contracts", label: "기한·위약금 부담 확인" } : { type: "operations", label: "기존 서비스로 마지막 운영 준비" } };
+  }
+  const requiredStarts = outstanding.reduce((total, n4) => total + (["meter", "digital", "queue"].includes(n4.kind) ? Math.max(0, n4.target - n4.value - (n4.pending ? 1 : 0)) : 1), 0);
+  const remainingStarts = Math.max(0, (deadline - state.year) * 2 - state.actionsUsed);
+  if (requiredStarts > remainingStarts) return { status: "locked", note: `${deadline}년 기한까지 필요한 준비는 최소 ${requiredStarts}건인데 남은 사업 추진 기회는 ${remainingStarts}회입니다.`, action: deadline < 2040 ? { type: "contracts", label: "기한·위약금 부담 확인" } : { type: "operations", label: "남은 운영 계획 확인" } };
+  for (const n4 of outstanding) {
+    const candidates = optionsFor(n4, options).filter((o) => o.readyYear <= deadline);
+    const option = candidates.find((o) => o.available);
+    if (option) return { status: "active", note: `${option.cost}억 · ${option.readyYear}년 가동. 비용과 경로를 비교한 뒤 결정하세요.`, zoneId: n4.zoneId, action: { type: "build", label: n4.kind === "asset" ? "공급 경로·규모 비교" : `${option.label} 살펴보기`, optionId: option.id, category: option.category, fuel: option.fuel } };
+  }
+  const pending = unmet.filter((n4) => n4.pending).sort((a, b) => a.pending.readyYear - b.pending.readyYear)[0];
+  if (!outstanding.length && pending) return { status: "waiting", note: `${pending.pending.readyYear}년 가동 예정입니다. 운영을 진행하며 준공을 기다려요.`, zoneId: pending.zoneId, action: { type: "advance", label: "준공을 향해 올해 운영" }, secondaryAction: { type: "projects", label: "공사 일정 보기", projectId: pending.pending.id } };
+  if (state.actionsUsed >= 2) return { status: "waiting", note: "올해 사업 추진 2회를 사용했어요. 다음 해에 남은 준비를 이어갈 수 있습니다.", action: { type: "advance", label: "올해 운영하고 다음 해로" }, secondaryAction: { type: "projects", label: "진행 중인 사업 확인" } };
+  const possible = outstanding.flatMap((n4) => optionsFor(n4, options).filter((o) => o.readyYear <= deadline));
+  const affordableLater = possible.find((o) => /예산/.test(o.reason));
+  if (affordableLater) return { status: "waiting", note: `현재 예산으로는 남은 준비가 어렵습니다. 예상 결산과 진행 중인 투자를 확인하세요.`, action: { type: "ledger", label: "예산·예상 결산 확인" }, secondaryAction: { type: "advance", label: "올해 운영 시작" } };
+  if (pending) return { status: "waiting", note: `${pending.pending.readyYear}년 가동 뒤 다음 준비를 이어갈 수 있습니다.`, zoneId: pending.zoneId, action: { type: "advance", label: "준비를 이어가며 올해 운영" }, secondaryAction: { type: "projects", label: "공사 일정 보기", projectId: pending.pending.id } };
+  return { status: "locked", note: deadline < 2040 ? `${deadline}년 기한 내 새 사업으로 갖추기 어려운 조건입니다. 약정 부담을 확인하세요.` : "남은 기간 또는 선행 조건 때문에 지금 착수할 수 없습니다. 기존 시설 운영을 점검하세요.", action: deadline < 2040 ? { type: "contracts", label: "계약 기한·부담 확인" } : { type: "operations", label: "기존 서비스 점검" } };
+}
+function applyPlan(spec, plan, complete = false) {
+  return finishQuest({ ...spec, description: `${spec.description}${complete || !plan.note ? "" : " " + plan.note}`, status: complete ? "complete" : plan.status, action: complete ? null : plan.action, ...plan.secondaryAction && !complete ? { secondaryAction: plan.secondaryAction } : {}, zoneId: plan.zoneId || spec.zoneId });
+}
+function needsSteps(needs) {
+  return needs.map((n4) => ({ id: n4.id, label: n4.label, complete: n4.met, note: n4.met ? "가동 중" : n4.pending ? `${n4.pending.readyYear}년 가동 예정` : "아직 준비하지 않음" }));
+}
+function improvementPlan(state, options, preview, settlePositive = true) {
+  if (preview.finance.closingCash < 0) return { status: "active", note: "현재 계획은 결산 후 자금 부족이 예상됩니다. 투자 취소·운영비·약정을 먼저 확인하세요.", action: { type: "ledger", label: "자금 부족 원인 확인" }, secondaryAction: { type: "projects", label: "공사·취소 환급 확인" } };
+  if (state.discount >= 0.2) return { status: "active", note: "큰 할인으로 실적당 수입이 줄어들고 있어요. 가격 정책과 예상 수지를 비교해보세요.", zoneId: "operations", action: { type: "operations", label: "할인·운영 수지 비교" } };
+  if (settlePositive && net({ finance: preview.finance }) > 0) return { status: "waiting", note: "현재 계획의 운영 흑자 전망을 실제 결산으로 확인해보세요.", action: { type: "advance", label: "올해 운영으로 확인" } };
+  const p = state.ports.korea;
+  const demand = preview.byFuel.slice().sort((a, b) => b.demand - a.demand);
+  const needs = [];
+  for (const f of demand) {
+    if (f.fuel === "ammonia" && p.fuels.ammonia.capacity <= 0) continue;
+    if (!p.fuels[f.fuel].ready) needs.push(need(state, "readiness", f.fuel));
+    else if (!p.fuels[f.fuel].simops) needs.push(need(state, "simops", f.fuel));
+    else if (f.unserved > 1 || f.served > f.capacity * 0.9) needs.push(need(state, "asset", f.fuel, p.fuels[f.fuel].capacity + 100));
+  }
+  const bottlenecks = preview.bottlenecks || [];
+  if (!needs.length && p.common.queue < 3 && (p.common.queue < 2 || bottlenecks.some((b) => b.id.startsWith("queue:")))) needs.push(need(state, "queue", "common", p.common.queue + 1));
+  if (!needs.length && bottlenecks.some((b) => b.id.startsWith("trust:"))) {
+    const nextTrust = ["meter", "digital"].filter((kind) => p.common[kind] < 2).sort((a, b) => p.common[a] - p.common[b])[0];
+    if (nextTrust) needs.push(need(state, nextTrust, "common", p.common[nextTrust] + 1));
+    else if (!p.common.recognition) needs.push(need(state, "recognition"));
+  }
+  const ammoniaDemand = preview.byFuel.find((f) => f.fuel === "ammonia")?.demand || 0;
+  if (!needs.length && state.options.transition !== "methanol_long" && ammoniaDemand / Math.max(1, preview.demand) >= 0.3 && (!p.fuels.ammonia.ready || p.fuels.ammonia.capacity < 100)) {
+    if (p.fuels.ammonia.capacity < 100) needs.push(need(state, "asset", "ammonia", 100));
+    if (!p.fuels.ammonia.ready) needs.push(need(state, "readiness", "ammonia"));
+  }
+  if (needs.length) return actionForNeeds(state, needs, options);
+  const projected = measuredLife([...state.history, { year: state.year, served: preview.served, demand: preview.demand, finance: preview.finance }]);
+  if (settlePositive && net({ finance: preview.finance }) > 0 || !settlePositive && projected.id === "thriving") return { status: "waiting", note: !settlePositive ? "다음 결산 전망이 번성 조건에 닿습니다. 실제 운영으로 확인해보세요." : "현재 계획의 운영 흑자 전망을 실제 결산으로 확인해보세요.", action: { type: "advance", label: "올해 운영으로 확인" } };
+  return { status: "active", note: !settlePositive ? `다음 결산 기준 2년 평균 전망은 운영 수지 ${signed(projected.operatingNet)}억 · 수행 ${number(projected.served)}기회 · 포획률 ${number(projected.capture)}%입니다. 성장 경로를 다시 비교해보세요.` : "가동 중인 서비스와 연간 운영비를 함께 살펴보세요. 새 사업의 유지비도 확인하세요.", action: { type: "operations", label: !settlePositive ? "현재 서비스·성장 경로 비교" : "실적·가격·병목 확인" }, secondaryAction: { type: "ledger", label: "운영비 확인" } };
+}
+function deriveQuestBoard(state) {
+  const playing = state.phase === "playing";
+  const p = state.ports.korea, history = state.history || [];
+  const options = playing ? getProjectOptions(state) : [];
+  const preview = playing ? previewYear(state) : state.lastResult;
+  const dashboard = getDashboard(state);
+  const quests = [];
+  const scenario = state.options.scenario;
+  let initialNeeds, title, why, description;
+  if (scenario === "supply") {
+    initialNeeds = [need(state, "asset", "methanol", 240)];
+    title = "부두에 공급 여력을 더해요";
+    description = "메탄올 공급능력을 95에서 240기회/년 이상으로 늘려 가동하세요.";
+    why = "이 시나리오는 작업 준비보다 공급 여력이 먼저 부족합니다. 빠른 연계 공급과 늦지만 운영비가 낮은 자체 기반을 비교하세요.";
+  } else if (scenario === "transition") {
+    initialNeeds = [need(state, "asset", "ammonia", 100), need(state, "readiness", "ammonia")];
+    title = "다음 연료의 문을 열어요";
+    description = "암모니아 공급기반과 운영 준비를 모두 가동한 뒤 첫 급유 실적을 만드세요.";
+    why = "탱크만 지어서는 급유가 시작되지 않습니다. 기존 메탄올 영업을 유지하며 공급과 운영 준비의 순서를 고르세요.";
+  } else {
+    initialNeeds = [need(state, "simops", "methanol")];
+    title = "기다리는 배를 손님으로";
+    description = "메탄올 화물작업·급유 병행 능력을 가동해 짧은 기항 시간의 벽을 낮추세요.";
+    why = "이 시나리오는 이미 공급 여력이 있습니다. 지금 놓치는 고객의 작업 시간부터 풀어보세요.";
+  }
+  const initialSteps = needsSteps(initialNeeds);
+  if (scenario === "transition") initialSteps.push({ id: "ammonia-first-service", label: "암모니아 급유를 실제 결산에서 수행", complete: history.some((h) => h.result?.byFuel?.some((f) => f.fuel === "ammonia" && f.served > 0)), note: "공급기반과 운영 준비가 모두 가동한 해에 확인" });
+  if (initialSteps.length === 1) {
+    const n4 = initialNeeds[0];
+    initialSteps.unshift({ id: "plan", label: "맞는 개선 사업 착수", complete: n4.met || !!n4.pending, note: n4.pending ? `${n4.pending.readyYear}년 가동 예정` : n4.met ? "개선 기반 확보" : "비용·가동 시점 비교" });
+  }
+  const initialComplete = initialSteps.every((s) => s.complete);
+  quests.push(applyPlan({ id: `scenario-${scenario}`, title, description, why, steps: initialSteps, rewardLabel: "첫 돌파 배지", badge: "첫 돌파", zoneId: initialNeeds[0].zoneId }, actionForNeeds(state, initialNeeds, options), initialComplete));
+  const profitYear = history.find((h) => net(h) > 0);
+  const profitPlan = playing ? improvementPlan(state, options, preview) : { status: "locked", action: null };
+  quests.push(applyPlan({ id: "first-profit", title: "우리 힘으로 첫 흑자", description: "정책예산과 투자비를 제외한 연간 운영 수지를 한 번 흑자로 만드세요.", why: "시설을 많이 사거나 예산을 쌓는 것과, 고객을 받아 운영비를 버는 것은 다릅니다.", steps: [{ id: "operate", label: "한 해 실제 운영 마치기", complete: history.length > 0 }, { id: "profit", label: "운영 기여이익이 운영비·위약금보다 많기", complete: !!profitYear, note: profitYear ? `${profitYear.year}년 첫 달성` : "장부의 운영 수지로 확인" }], rewardLabel: "첫 흑자 배지", badge: "첫 흑자", zoneId: "operations" }, profitPlan, !!profitYear));
+  const stableEnd = history.findIndex((h, i) => i > 0 && net(h) > 0 && net(history[i - 1]) > 0);
+  quests.push(applyPlan({ id: "steady-service", title: "두 해 이어지는 항만의 일상", description: "2년 연속 운영 흑자를 내어 일시적인 반짝 실적을 넘어보세요.", why: "유지비와 계약 부담까지 감당하는 서비스를 만들면 항만의 활기도 안정됩니다.", steps: [{ id: "one", label: "운영 흑자 1년", complete: !!profitYear }, { id: "two", label: "2년 연속 운영 흑자", complete: stableEnd >= 0, note: stableEnd >= 0 ? `${history[stableEnd - 1].year}–${history[stableEnd].year}년 달성` : "연속된 두 결산에서 확인" }], rewardLabel: "꾸준한 항만 배지", badge: "꾸준한 항만", zoneId: "operations" }, profitPlan, stableEnd >= 0));
+  const dualNeeds = [need(state, "readiness", "ammonia"), need(state, "asset", "ammonia", 100)];
+  const dualSteps = needsSteps(dualNeeds);
+  const dualService = history.some((h) => h.result?.byFuel?.every((f) => f.served > 0));
+  dualSteps.push({ id: "dual-service", label: "한 해 두 연료 모두 급유 실적 기록", complete: dualService });
+  quests.push(applyPlan({ id: "two-fuels", title: "두 연료가 드나드는 부두", description: "선택 성장 목표 · 메탄올과 암모니아를 함께 서비스해보세요.", why: "연료 전망과 현재 영업 수지를 보고 도전 시점을 선택하세요. 모든 캠페인에서 즉시 달성해야 하는 필수 목표는 아닙니다.", steps: dualSteps, rewardLabel: "두 연료 배지", badge: "두 연료", zoneId: "ammonia" }, actionForNeeds(state, dualNeeds, options), dualService));
+  const trustNeeds = [need(state, "meter"), need(state, "digital")];
+  const trusted = trustNeeds.every((n4) => n4.met);
+  quests.push(applyPlan({ id: "verified-trade", title: "믿고 찾는 거래 창구", description: "선택 성장 목표 · 계량·검증과 전자 증빙을 각각 1단계 이상 가동하세요.", why: "공통 거래 기반은 두 연료가 함께 사용합니다. 계량만으로 모든 회랑 계약 조건이 충족되지는 않습니다.", steps: needsSteps(trustNeeds), rewardLabel: "검증 거래 배지", badge: "검증 거래", zoneId: "trust" }, actionForNeeds(state, trustNeeds, options), trusted));
+  const contractServed = state.contracts.some((c) => c.served > 0);
+  const offers = playing ? getContractOffers(state) : [];
+  const anyLive = state.contracts.some((c) => ["scheduled", "active"].includes(c.status));
+  quests.push(finishQuest({ id: "first-contract", title: "선사와 첫 약속을 지켜요", description: "선택 성장 목표 · 조건을 갖출 수 있는 계약을 고르고 실제 약정 물량을 수행하세요.", why: "계약 수락만으로 보상을 주지 않습니다. 준비 기한과 위약금이 부담되면 계약 없이 성장해도 됩니다.", steps: [{ id: "accept", label: "기한과 위약금을 확인하고 계약 수락", complete: state.contracts.length > 0 }, { id: "serve", label: "약정 급유를 실제 결산에서 수행", complete: contractServed }], status: contractServed ? "complete" : offers.length || anyLive ? "active" : "missed", action: contractServed ? null : offers.length || anyLive ? { type: "contracts", label: anyLive ? "계약 조건·이행 확인" : "선사 요청 비교" } : null, progressLabel: contractServed ? "첫 수행 달성" : offers.length || anyLive ? "수락 전 조건 확인" : "현재 참여 가능한 약정 없음", rewardLabel: "첫 약속 배지", badge: "첫 약속", zoneId: "trust" }));
+  const thrivingIndex = history.findIndex((_, i) => measuredLife(history.slice(0, i + 1)).id === "thriving");
+  const actualLife = deriveHarborLife(state);
+  const flourishingSteps = [
+    { id: "stable", label: "최근 2년 모두 운영 흑자", complete: thrivingIndex >= 0 || history.length >= 2 && history.slice(-2).every((h) => net(h) > 0) },
+    { id: "net", label: "최근 2년 평균 운영 수지 +15억 이상", complete: thrivingIndex >= 0 || (actualLife.metrics.operatingNet ?? -Infinity) >= 15, note: actualLife.metrics.operatingNet === null ? "실제 결산을 기다려요" : `${signed(actualLife.metrics.operatingNet)}억` },
+    { id: "activity", label: "최근 2년 연평균 급유 수행 170기회 이상", complete: thrivingIndex >= 0 || (actualLife.metrics.served ?? 0) >= 170, note: `${number(actualLife.metrics.served)}기회` },
+    { id: "capture", label: "최근 2년 잠재시장 포획률 10% 이상", complete: thrivingIndex >= 0 || (actualLife.metrics.capture ?? 0) >= 10, note: `${number(actualLife.metrics.capture)}%` }
+  ];
+  quests.push(applyPlan({ id: "flourishing", title: "항만에 축제의 깃발을", description: "아래 네 조건을 같은 결산에서 함께 달성해 “번성하는 항만”을 만드세요.", why: "2년 연속 운영 흑자와 최근 2년 평균 수지·활동·포획률을 함께 봅니다. 달성 후에는 배지가 남고 풍경은 이후 실적에 따라 달라집니다.", steps: flourishingSteps, rewardLabel: "번성하는 항만 배지", badge: "번성", zoneId: "control" }, playing ? improvementPlan(state, options, preview, false) : profitPlan, thrivingIndex >= 0));
+  const obligations = [];
+  for (const c of state.contracts) {
+    const contractNeeds = [];
+    for (const [key, target] of Object.entries(c.needs)) {
+      if (key === "ready") contractNeeds.push(need(state, "readiness", c.fuel));
+      else if (key === "simops") contractNeeds.push(need(state, "simops", c.fuel));
+      else if (key === "capacity") contractNeeds.push(need(state, "asset", c.fuel, target));
+      else contractNeeds.push(need(state, key, "common", Number(target)));
+    }
+    for (const n4 of contractNeeds.filter((n5) => n5.kind === "asset")) n4.met = (dashboard.service.find((s) => s.fuel === c.fuel)?.capacity || 0) >= n4.target;
+    const total = c.volume * (c.endYear - c.startYear + 1);
+    const successful = c.status === "completed" && c.served >= total - 1e-6;
+    const closed = ["failed", "completed"].includes(c.status);
+    const plan = actionForNeeds(state, contractNeeds, options, c.status === "scheduled" ? c.deadlineYear : 2040);
+    const spec = { id: `contract-${c.id}`, title: `약속 지키기 · ${c.label}`, description: `${c.deadlineYear}년 개시 · ${c.endYear}년까지 매년 ${c.volume}기회.`, why: "수락한 약정입니다. 준비가 늦거나 약정 급유를 못하면 기존 게임의 위약금이 적용됩니다.", steps: [...needsSteps(contractNeeds), { id: "delivery", label: `약정 전체 ${total}기회 수행`, complete: successful, note: `현재 ${number(c.served)} / ${total}기회` }], deadlineYear: c.deadlineYear, rewardLabel: "약정 완수 배지", badge: "약정 완수", progress: Math.round(100 * c.served / Math.max(1, total)), progressLabel: `${number(c.served)} / ${total}기회`, zoneId: c.fuel === "ammonia" ? "ammonia" : "methanol" };
+    const q = closed ? finishQuest({ ...spec, status: successful ? "complete" : "missed", action: null }) : applyPlan(spec, plan, false);
+    if (q.action?.type === "contracts") q.action = { ...q.action, contractId: c.id };
+    if (q.secondaryAction?.type === "contracts") q.secondaryAction = { ...q.secondaryAction, contractId: c.id };
+    obligations.push({ quest: q, contract: c, unmet: contractNeeds.some((n4) => !n4.met) });
+    quests.push(q);
+  }
+  const life = deriveHarborLife(state);
+  let recovery = null;
+  const hadStruggle = history.some((_, i) => measuredLife(history.slice(0, i + 1)).id === "struggling");
+  if (hadStruggle) {
+    const recoveryComplete = history.some((_, i) => i > 0 && ["steady", "thriving"].includes(measuredLife(history.slice(0, i + 1)).id) && history.slice(0, i).some((_2, j) => measuredLife(history.slice(0, j + 1)).id === "struggling"));
+    recovery = applyPlan({ id: "recovery", title: "다시 켜지는 항만의 불빛", description: "운영 적자의 원인을 풀고 “활기찬 항만” 이상으로 돌아오세요.", why: "상점과 차량은 실적이 회복되면 다시 돌아옵니다. 기존 설비는 사라지지 않았어요.", steps: [{ id: "positive", label: "다시 운영 흑자 기록", complete: recoveryComplete || history.length > 0 && net(history.at(-1)) > 0 }, { id: "recover", label: "활기 또는 번성 상태로 회복", complete: recoveryComplete }], rewardLabel: "다시 일어선 항만 배지", badge: "회복", zoneId: "operations" }, profitPlan, recoveryComplete);
+    quests.push(recovery);
+  }
+  const urgent = obligations.filter((o) => !["complete", "missed"].includes(o.quest.status) && (o.contract.status === "scheduled" && (o.contract.deadlineYear - state.year <= 2 || o.unmet) || o.contract.status === "active" && o.unmet)).sort((a, b) => a.contract.deadlineYear - b.contract.deadlineYear)[0]?.quest;
+  let active = null;
+  if (playing) {
+    if (preview.finance.closingCash < 0) active = finishQuest({ id: "cash-rescue", title: "이번 결산의 자금을 지켜요", description: "현재 계획대로 운영하면 자금이 부족합니다. 장부와 취소 가능한 공사를 확인하고 운영을 결정하세요.", why: "예상 결산은 전망입니다. 실제 운영은 버튼을 누른 뒤 진행됩니다.", status: "active", steps: [{ id: "solvent", label: "예상 결산 후 자금 0억 이상 확보", complete: false }], rewardLabel: "위기 대응", action: { type: "ledger", label: "자금 부족 원인 확인" }, secondaryAction: { type: "projects", label: "취소 가능 공사 확인" }, zoneId: "control" });
+    else if (urgent) active = urgent;
+    else if (life.id === "struggling" && recovery?.status !== "complete") active = recovery;
+    else active = quests.find((q) => ["scenario-" + scenario, "first-profit", "steady-service"].includes(q.id) && !["complete", "missed", "locked"].includes(q.status));
+    if (!active) {
+      const candidates = quests.filter((q) => ["verified-trade", "two-fuels", "flourishing"].includes(q.id) && !["complete", "locked", "missed"].includes(q.status));
+      const optionalOrder = state.options.transition === "methanol_long" ? ["flourishing", "verified-trade", "two-fuels"] : state.options.transition === "ammonia_fast" ? ["two-fuels", "verified-trade", "flourishing"] : ["verified-trade", "flourishing", "two-fuels"];
+      candidates.sort((a, b) => optionalOrder.indexOf(a.id) - optionalOrder.indexOf(b.id));
+      active = candidates.find((q) => q.action?.type !== "operations") || candidates[0] || null;
+    }
+    if (!active) active = finishQuest({ id: "keep-sailing", title: state.year === 2040 ? "마지막 항해를 마쳐요" : "올해의 항만을 운영해요", description: "현재 연료 전망과 경쟁 상황을 살펴본 뒤 운영을 진행하세요. 다른 성장 목표에도 자유롭게 도전할 수 있습니다.", why: "퀘스트는 선택을 돕는 안내입니다. 최종 평가는 기존 누적 포획률과 운영 기록을 따릅니다.", status: "active", steps: [{ id: "settle", label: `${state.year}년 운영 마치기`, complete: false }], action: { type: "advance", label: state.year === 2040 ? "마지막 운영 시작" : "올해 운영 시작" }, secondaryAction: { type: "operations", label: "올해 소식·전망 확인" }, rewardLabel: "운영 기록", zoneId: "control" });
+    if (!quests.some((q) => q.id === active.id)) quests.unshift(active);
+  }
+  if (!playing) for (const q of quests) {
+    q.action = null;
+    delete q.secondaryAction;
+  }
+  const completedIds = quests.filter((q) => q.status === "complete").map((q) => q.id);
+  const core = quests.filter((q) => ["scenario-" + scenario, "first-profit", "steady-service", "two-fuels", "verified-trade", "first-contract", "flourishing"].includes(q.id));
+  const completedCount = core.filter((q) => q.status === "complete").length;
+  const chapterId = !initialComplete ? "first" : !profitYear ? "earning" : stableEnd < 0 ? "steady" : "growth";
+  return {
+    active,
+    quests,
+    completedIds,
+    completedCount,
+    totalCount: core.length,
+    chapter: { id: chapterId, label: { first: "첫 돌파", earning: "스스로 버는 항만", steady: "꾸준한 영업", growth: "나만의 성장 항로" }[chapterId], step: Math.min(core.length, completedCount + 1), total: core.length },
+    summary: playing ? "지금 목표 하나를 따라가거나, 다른 성장 목표를 골라보세요. 배지는 추가 자금을 지급하지 않습니다." : "운영 기록에서 달성한 목표입니다. 배지는 최종 경제 성적과 별개입니다."
+  };
+}
+
+// src/HarborArt.jsx
+import React, { useId } from "react";
+var iso = (u, v, z = 0) => [800 + (u - v) * 0.9, 260 + (u + v) * 0.45 - z];
+var pts = (values) => values.map((p) => p.join(",")).join(" ");
+var quad = (u, v, w, d, z = 0) => [iso(u, v, z), iso(u + w, v, z), iso(u + w, v + d, z), iso(u, v + d, z)];
+var fuelColor = (fuel) => fuel === "ammonia" ? "#b584ff" : "#25dfae";
+var fuelDark = (fuel) => fuel === "ammonia" ? "#7751bd" : "#109e85";
+var useArtId = () => `ha${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+function shade(value, amount = 0) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(value)) return value;
+  return "#" + [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16)).map((n4) => Math.round(amount >= 0 ? n4 + (255 - n4) * amount : n4 * (1 + amount)).toString(16).padStart(2, "0")).join("");
+}
+var line = (a, b) => `M${a.join(" ")}L${b.join(" ")}`;
+var front = (u, v, w, h, z = 0) => [iso(u, v, z), iso(u + w, v, z), iso(u + w, v, z + h), iso(u, v, z + h)];
+function Plane({ u, v, w, d, z = 0, fill = "#efdcb9", stroke = "none", opacity = 1, ...rest }) {
+  return /* @__PURE__ */ React.createElement("polygon", { points: pts(quad(u, v, w, d, z)), fill, stroke, opacity, strokeLinejoin: "round", ...rest });
+}
+function Box({ u, v, w, d, h = 22, z = 0, top = "#fff1cc", left = "#d9d5c4", right = "#8cb3c3", stroke = "#365775", strokeWidth = 1, children }) {
+  const b = iso(u + w, v, z), c = iso(u + w, v + d, z), d1 = iso(u, v + d, z);
+  const at = iso(u, v, z + h), bt = iso(u + w, v, z + h), ct = iso(u + w, v + d, z + h), dt = iso(u, v + d, z + h);
+  return /* @__PURE__ */ React.createElement("g", { strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polygon", { points: pts([d1, c, ct, dt]), fill: left, stroke, strokeWidth }), /* @__PURE__ */ React.createElement("polygon", { points: pts([b, c, ct, bt]), fill: right, stroke, strokeWidth }), /* @__PURE__ */ React.createElement("polygon", { points: pts([at, bt, ct, dt]), fill: top, stroke, strokeWidth }), h > 5 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: line(dt, ct), stroke: "#fffce3", strokeOpacity: ".55", strokeWidth: "1.8" }), /* @__PURE__ */ React.createElement("path", { d: line(ct, c), stroke: "#193c62", strokeOpacity: ".18", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: line(d1, c), stroke: "#224568", strokeOpacity: ".2", strokeWidth: "1.7" })), children);
+}
+function Tree({ x, y, s = 1, tone = 0 }) {
+  const id = useArtId(), pine = Number(tone) % 3 === 1;
+  return /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y}) scale(${s})` }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("radialGradient", { id: `${id}leaf`, cx: ".3", cy: ".2", r: ".9" }, /* @__PURE__ */ React.createElement("stop", { stopColor: tone ? "#a6e565" : "#c0ed77" }), /* @__PURE__ */ React.createElement("stop", { offset: ".48", stopColor: tone ? "#56c25e" : "#70cf5e" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#239e73" }))), /* @__PURE__ */ React.createElement("ellipse", { cx: "10", cy: "7", rx: pine ? 23 : 27, ry: "10", fill: "#164971", opacity: ".16" }), /* @__PURE__ */ React.createElement("path", { d: "M-3 1V-24h7V2Z", fill: "#a57146", stroke: "#775a3d", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("path", { d: "M-1-8 9-19M0-14-10-23", fill: "none", stroke: "#a57146", strokeWidth: "4", strokeLinecap: "round" }), pine ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M0-72Q-12-59-20-43L-11-43Q-24-29-29-16Q-4-3 26-14L14-34 22-34Q9-53 0-72Z", fill: `url(#${id}leaf)`, stroke: "#238d65", strokeWidth: "1.8" }), /* @__PURE__ */ React.createElement("path", { d: "M0-68Q-9-54-15-47M-10-32Q-17-23-18-19", stroke: "#c6ef8c", strokeWidth: "3.5", strokeLinecap: "round", opacity: ".8" }), /* @__PURE__ */ React.createElement("path", { d: "M0-72Q7-52 8-39L22-34 14-34 26-14Q16-10 5-10L-1-32Z", fill: "#148c70", opacity: ".2" })) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M-25-24C-36-34-24-52-12-52C-17-72 13-79 24-61C41-63 48-37 33-29C31-10 5-5-8-16C-19-11-28-15-25-24Z", fill: `url(#${id}leaf)`, stroke: "#299e68", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M-19-41C-20-48-12-54-5-51M2-62C11-68 20-60 20-57", fill: "none", stroke: "#e0f6a3", strokeWidth: "6", strokeLinecap: "round", opacity: ".55" }), /* @__PURE__ */ React.createElement("path", { d: "M29-49C43-34 27-21 11-22C10-12-4-11-11-18C2-6 32-10 33-29C41-33 43-44 36-51Z", fill: "#118c71", opacity: ".28" })));
+}
+function Tank({ u, v, r = 27, h = 42, fuel = "methanol", ghost = false, small = false }) {
+  const id = useArtId(), [x, y] = iso(u, v), rx = r, ry = r * 0.45, H = h * 1.1;
+  const color = ghost ? "#acbbc6" : fuelColor(fuel), dark = ghost ? "#7e97a7" : fuelDark(fuel);
+  const shell = `M${x - rx} ${y - H}V${y}A${rx} ${ry} 0 0 0 ${x + rx} ${y}V${y - H}Z`;
+  const stripe = `M${x - rx} ${y - H * 0.68}v${H * 0.45}a${rx} ${ry} 0 0 0 ${rx * 2} 0v${-H * 0.45}a${rx} ${ry} 0 0 1 ${-rx * 2} 0Z`;
+  return /* @__PURE__ */ React.createElement("g", null, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: `${id}steel` }, /* @__PURE__ */ React.createElement("stop", { stopColor: "#b4d5df" }), /* @__PURE__ */ React.createElement("stop", { offset: ".2", stopColor: "#f9ffff" }), /* @__PURE__ */ React.createElement("stop", { offset: ".46", stopColor: "#eff8f3" }), /* @__PURE__ */ React.createElement("stop", { offset: ".76", stopColor: "#c7e2e2" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#79a9bc" })), /* @__PURE__ */ React.createElement("linearGradient", { id: `${id}fuel` }, /* @__PURE__ */ React.createElement("stop", { stopColor: dark }), /* @__PURE__ */ React.createElement("stop", { offset: ".22", stopColor: shade(color, 0.3) }), /* @__PURE__ */ React.createElement("stop", { offset: ".5", stopColor: color }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: dark })), /* @__PURE__ */ React.createElement("radialGradient", { id: `${id}cap`, cx: ".3", cy: ".15", r: ".85" }, /* @__PURE__ */ React.createElement("stop", { stopColor: "#fffef1" }), /* @__PURE__ */ React.createElement("stop", { offset: ".62", stopColor: "#e9f2e8" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#aecbd1" }))), /* @__PURE__ */ React.createElement("ellipse", { cx: x + 9, cy: y + 8, rx: rx + 7, ry: ry + 5, fill: "#183e67", opacity: ".18" }), /* @__PURE__ */ React.createElement("ellipse", { cx: x, cy: y + 2, rx: rx + 3, ry: ry + 2, fill: "#487789" }), /* @__PURE__ */ React.createElement("path", { d: shell, fill: `url(#${id}steel)`, stroke: "#47778d", strokeWidth: small ? 1 : 1.7 }), /* @__PURE__ */ React.createElement("path", { d: stripe, fill: `url(#${id}fuel)` }), /* @__PURE__ */ React.createElement("path", { d: `M${x - rx} ${y - H * 0.19}a${rx} ${ry} 0 0 0 ${rx * 2} 0`, fill: "none", stroke: "#759fae", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("ellipse", { cx: x, cy: y - H, rx, ry, fill: `url(#${id}cap)`, stroke: "#507c8c", strokeWidth: small ? 1 : 1.5 }), /* @__PURE__ */ React.createElement("ellipse", { cx: x, cy: y - H - 1, rx: rx * 0.81, ry: ry * 0.79, fill: "none", stroke: "#faffef", strokeWidth: "2.7" }), /* @__PURE__ */ React.createElement("ellipse", { cx: x - 1, cy: y - H - 1, rx: rx * 0.7, ry: ry * 0.64, fill: "#f8faf0", stroke: "#a8c4c9", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("path", { d: `M${x - rx * 0.58} ${y - H + 6}v${H * 0.79}`, stroke: "#fff", strokeOpacity: ".45", strokeWidth: small ? 2 : 5, strokeLinecap: "round" }), !small && /* @__PURE__ */ React.createElement("g", null, /* @__PURE__ */ React.createElement("path", { d: `M${x + rx * 0.61} ${y - H + 3}v${H - 2}M${x + rx * 0.82} ${y - H + 1}v${H - 2}`, stroke: "#ffedaa", strokeWidth: "2.5" }), [0.18, 0.36, 0.54, 0.72, 0.9].map((t) => /* @__PURE__ */ React.createElement("path", { key: t, d: `M${x + rx * 0.61} ${y - H + H * t}l${rx * 0.21} -1.8`, stroke: "#e6c778", strokeWidth: "1.8" })), /* @__PURE__ */ React.createElement("path", { d: `M${x - rx * 0.72} ${y - H - 2}v-7M${x + rx * 0.72} ${y - H - 2}v-7M${x} ${y - H + ry * 0.7}v-6`, stroke: "#87a8ad", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: `M${x - rx * 0.72} ${y - H - 9}a${rx * 0.72} ${ry * 0.64} 0 0 0 ${rx * 1.44} 0`, fill: "none", stroke: "#cfe0da", strokeWidth: "1.7" }), /* @__PURE__ */ React.createElement("path", { d: `M${x + rx * 0.3} ${y + ry * 0.6}h${rx * 0.65}v7h10`, stroke: "#436d82", strokeWidth: "7", strokeLinejoin: "round", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: `M${x + rx * 0.3} ${y + ry * 0.6 - 1}h${rx * 0.65}v7h10`, stroke: ghost ? "#b3bcc0" : "#f6ba53", strokeWidth: "4", strokeLinejoin: "round", fill: "none" }), /* @__PURE__ */ React.createElement("circle", { cx: x + rx * 0.75, cy: y + ry * 0.6 - 2, r: "5.4", fill: ghost ? "#a4adb8" : "#ff8a54", stroke: "#596f7d", strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: `M${x + rx * 0.75 - 3} ${y + ry * 0.6 - 2}h6M${x + rx * 0.75} ${y + ry * 0.6 - 5}v6`, stroke: "#ffe9b6", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("ellipse", { cx: x - 2, cy: y - H * 0.42, rx: "7", ry: "8", fill: "#f2ffeb", opacity: ".92" }), ghost ? /* @__PURE__ */ React.createElement("path", { d: `M${x - 5} ${y - H * 0.42 - 3}v6M${x + 1} ${y - H * 0.42 - 3}v6`, stroke: "#7e95a6", strokeWidth: "2.1" }) : /* @__PURE__ */ React.createElement("path", { d: `M${x - 5} ${y - H * 0.42 + 2}q0-7 8-7q-1 7-8 7m1 1 5-5`, stroke: dark, fill: "none", strokeWidth: "1.5", strokeLinecap: "round" })), /* @__PURE__ */ React.createElement("path", { d: `M${x + 2} ${y - H - 2}v-8l7-2`, stroke: "#59869a", strokeWidth: small ? 2 : 3, fill: "none", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("ellipse", { cx: x + 8, cy: y - H - 12, rx: "5", ry: "2.2", fill: ghost ? "#ccd2c3" : "#ffce6a", stroke: "#9d8554", strokeWidth: ".8" }));
+}
+function Warehouse({ u, v, w = 100, d = 64, h = 34, color = "#b7d9dd", roof = "#ff8364" }) {
+  const rise = Math.max(8, Math.min(17, d * 0.25)), wall = shade(color, 0.38), dark = shade(color, -0.15), rim = "#365c79";
+  const a = iso(u - 4, v - 4, h + 2), b = iso(u + w + 4, v - 4, h + 2), c = iso(u + w + 4, v + d + 4, h + 2), e = iso(u - 4, v + d + 4, h + 2), r0 = iso(u - 4, v + d / 2, h + rise), r1 = iso(u + w + 4, v + d / 2, h + rise);
+  const bays = w > 70 ? 3 : 2, doorW = Math.min(20, w / (bays + 1));
+  return /* @__PURE__ */ React.createElement("g", { strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polygon", { points: pts([iso(u + 9, v + 7), iso(u + w + 12, v + 7), iso(u + w + 23, v + d + 13), iso(u + 21, v + d + 13)]), fill: "#193f65", opacity: ".17" }), /* @__PURE__ */ React.createElement(Box, { u: u - 2, v: v - 2, w: w + 4, d: d + 4, h: 5, top: "#eaf0d9", left: "#9cacb1", right: "#7196a9", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement(Box, { u, v, w, d, h, z: 3, top: wall, left: wall, right: dark, stroke: rim, strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([iso(u + w, v, h), iso(u + w, v + d, h), iso(u + w, v + d / 2, h + rise)]), fill: shade(color, -0.02), stroke: rim, strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([a, b, r1, r0]), fill: shade(roof, 0.24), stroke: rim, strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([r0, r1, c, e]), fill: roof, stroke: rim, strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: line(e, c), stroke: shade(roof, -0.2), strokeWidth: "5" }), /* @__PURE__ */ React.createElement("path", { d: line(r0, r1), stroke: shade(roof, 0.66), strokeWidth: "3", strokeLinecap: "round" }), Array.from({ length: Math.max(3, Math.floor(w / 18)) }, (_, i) => /* @__PURE__ */ React.createElement("path", { key: i, d: line(iso(u + 6 + i * 18, v + d / 2, h + rise + 0.5), iso(u + 6 + i * 18, v + d + 3, h + 2)), stroke: shade(roof, -0.15), strokeOpacity: ".65", strokeWidth: "1.5" })), Array.from({ length: bays }, (_, i) => {
+    const at = u + (i + 0.5) * w / bays - doorW / 2;
+    return /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("polygon", { points: pts(front(at - 2, v + d + 0.3, doorW + 4, 22, 3)), fill: "#436a7f" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(front(at, v + d + 0.7, doorW, 19, 3)), fill: "#8fb6c1", stroke: "#fff4d2", strokeWidth: "1.4" }), [7, 12, 17].map((z) => /* @__PURE__ */ React.createElement("path", { key: z, d: line(iso(at, v + d + 1, z), iso(at + doorW, v + d + 1, z)), stroke: "#608d9f", strokeWidth: "1" })), /* @__PURE__ */ React.createElement(Box, { u: at - 3, v: v + d, w: doorW + 6, d: 7, h: 3, z: 25, top: "#fff0ba", left: "#f6ad63", right: "#d6824e", strokeWidth: ".8" }));
+  }), w > 70 && /* @__PURE__ */ React.createElement("g", null, /* @__PURE__ */ React.createElement(Plane, { u: u + w * 0.58, v: v + d * 0.25, w: 15, d: 14, z: h + rise + 1, fill: "#4b7793", stroke: "#d1e5dd", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + w * 0.58 + 7, v + d * 0.25, h + rise + 1.2), iso(u + w * 0.58 + 7, v + d * 0.25 + 14, h + rise + 1.2)), stroke: "#9fc5d1", strokeWidth: ".8" })));
+}
+function Crane({ u, v, active = false, scale = 1 }) {
+  const id = useArtId(), [x, y] = iso(u, v);
+  return /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y}) scale(${scale})`, strokeLinejoin: "round", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: `${id}yellow`, x1: "0", x2: "1", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { stopColor: "#fff083" }), /* @__PURE__ */ React.createElement("stop", { offset: ".5", stopColor: "#ffd147" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#f0a72d" }))), /* @__PURE__ */ React.createElement("path", { d: "m-31 10 41-18 38 20-45 21Z", fill: "#184368", opacity: ".18" }), /* @__PURE__ */ React.createElement("path", { d: "m-34 0 35-17 46 23-36 18Z", fill: "#55798d", stroke: "#2e516b", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("path", { d: "m-34 0 45 24v7L-34 7Z", fill: "#315976" }), /* @__PURE__ */ React.createElement("path", { d: "m11 24 36-18v7L11 31Z", fill: "#426b7e" }), [-21, 22].map((tx, i) => /* @__PURE__ */ React.createElement("g", { key: tx, transform: `translate(${tx} ${i ? 13 : -8})` }, /* @__PURE__ */ React.createElement("ellipse", { rx: "9", ry: "5", fill: "#1d3b58" }), /* @__PURE__ */ React.createElement("circle", { cy: "2", r: "4", fill: "#718999", stroke: "#d7e3dc", strokeWidth: "1.4" }))), /* @__PURE__ */ React.createElement("path", { d: "M-23 2V-106L-11-112V-5Z", fill: "#d49120", stroke: "#946b2f", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("path", { d: "M-23 2V-106L-15-102V6Z", fill: "#ffdb54" }), /* @__PURE__ */ React.createElement("path", { d: "M14 16V-89l11-6V10Z", fill: "#bb851f", stroke: "#946b2f", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("path", { d: "M14 16V-89l7 4V20Z", fill: "#ffcf42" }), /* @__PURE__ */ React.createElement("path", { d: "M-16-91 17-73M-16-48 17-30M-16-17 17-64M-16-80 17-34", stroke: "#e3a12c", strokeWidth: "5", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "M-17-92 16-74M-17-49 16-31M-17-18 16-65M-17-81 16-35", stroke: "#ffe575", strokeWidth: "2", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "m-31-112 88-44 46 22-88 45Z", fill: `url(#${id}yellow)`, stroke: "#a37229", strokeWidth: "1.7" }), /* @__PURE__ */ React.createElement("path", { d: "m-31-112 46 23v16l-46-23Z", fill: "#f7b330", stroke: "#ad782b", strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: "m15-89 88-45v16L15-73Z", fill: "#cd8b22", stroke: "#a37229", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("path", { d: "m-29-114 86-43 43 21", stroke: "#fff2a4", strokeWidth: "3", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "m23-88 72-36v7L23-81Z", fill: "#fff0a5", opacity: ".6" }), [35, 56, 77].map((tx) => /* @__PURE__ */ React.createElement("path", { key: tx, d: `M${tx} ${-85 - (tx - 23) * 0.5}l6-10`, stroke: "#a87626", strokeWidth: "1.8" })), /* @__PURE__ */ React.createElement("path", { d: "M-23-111v-24l29 14v25Z", fill: "#f4b840", stroke: "#a77734", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "m-19-131 21 10v16l-21-10Z", fill: "#447b9f", stroke: "#fff0ac", strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: "m-17-128 7 3v13l-7-3Z", fill: "#91def0" }), /* @__PURE__ */ React.createElement("path", { d: "m-7-124 7 3v6l-7-3Z", fill: "#b8ebf0", opacity: ".75" }), /* @__PURE__ */ React.createElement("path", { d: "m-26-136 12-6 25 13-12 6Z", fill: "#fff3ba", stroke: "#a77734", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("path", { d: "m-28-100 0 26m4-24 0 26m-4-21 4 2m-4 5 4 2m-4 5 4 2", stroke: "#ffeba0", strokeWidth: "1.7", fill: "none" }), /* @__PURE__ */ React.createElement("g", { className: active ? "hs-crane-hook hs-animated" : "" }, /* @__PURE__ */ React.createElement("path", { d: "M78-130v74M84-133v74", stroke: "#33566c", strokeWidth: "1.8" }), /* @__PURE__ */ React.createElement("path", { d: "m71-57 10-5 10 5v10l-10 5-10-5Z", fill: "#ffc641", stroke: "#9c752a", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M81-42v7q11 7 2 12", stroke: "#31566e", strokeWidth: "4", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "m62-26 18-9 27 14-18 9Z", fill: "#ffda60", stroke: "#a57a36", strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: "m62-26 27 14v6L62-20Z", fill: "#e49c2e" }), /* @__PURE__ */ React.createElement("path", { d: "m89-12 18-9v6L89-6Z", fill: "#f8bd34" }), /* @__PURE__ */ React.createElement("path", { d: "m67-22 4 2m5 2 4 2m5 2 4 2", stroke: "#5a6358", strokeWidth: "3" })), /* @__PURE__ */ React.createElement("circle", { cx: "-17", cy: "-141", r: "4", fill: active ? "#b9ff69" : "#ff9c40", stroke: "#fff5bd", strokeWidth: "1.5", className: active ? "hs-signal hs-animated" : "" }));
+}
+function Container({ u, v, color = "#ff9d4c", w = 32, d = 16, z = 0 }) {
+  return /* @__PURE__ */ React.createElement("g", null, /* @__PURE__ */ React.createElement(Box, { u, v, w, d, h: 16, z, top: shade(color, 0.24), left: color, right: shade(color, -0.22), stroke: shade(color, -0.43), strokeWidth: ".9" }), Array.from({ length: Math.floor((w - 5) / 5) }, (_, i) => 6 + i * 5).map((at) => /* @__PURE__ */ React.createElement("path", { key: at, d: line(iso(u + at, v + d, z + 2), iso(u + at, v + d, z + 14)), stroke: shade(color, -0.23), strokeWidth: "1.1" })), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + w, v + d / 2, z + 2), iso(u + w, v + d / 2, z + 14)), stroke: shade(color, 0.38), strokeWidth: "1.1" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + 2, v + d, z + 15), iso(u + w - 2, v + d, z + 15)), stroke: shade(color, 0.55), strokeWidth: "1.2" }), w > 25 && /* @__PURE__ */ React.createElement("polygon", { points: pts(front(u + w * 0.56, v + d + 0.1, w * 0.25, 4, z + 7)), fill: "#fff3d6", opacity: ".8" }));
+}
+function Ship({ u, v, fuel = "methanol", flow = "service", small = false, docked = false }) {
+  const id = useArtId(), b = small ? 28 : 41, l = small ? 75 : 125, bow = v + l / 2 + 8, stern = v - l / 2;
+  const hull = (z) => [iso(u - b / 2, stern, z), iso(u + b / 2, stern, z), iso(u + b / 2, v + l / 2 - 18, z), iso(u, bow, z), iso(u - b / 2, v + l / 2 - 18, z)];
+  const top = hull(12), water = hull(0), [x, y] = iso(u, v), navy = flow === "deferred" ? "#436b8b" : "#255a84", accent = flow === "deferred" ? "#ff9a61" : fuelColor(fuel);
+  return /* @__PURE__ */ React.createElement("g", { strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", { id: `${id}hull`, x1: "0", y1: "0", x2: ".8", y2: "1" }, /* @__PURE__ */ React.createElement("stop", { stopColor: shade(navy, 0.22) }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#173d63" })), /* @__PURE__ */ React.createElement("radialGradient", { id: `${id}water` }, /* @__PURE__ */ React.createElement("stop", { stopColor: "#115e94", stopOpacity: ".4" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#0b699a", stopOpacity: "0" }))), /* @__PURE__ */ React.createElement("ellipse", { cx: x + 5, cy: y + 10, rx: l * 0.72, ry: l * 0.28, transform: `rotate(-27 ${x + 5} ${y + 10})`, fill: `url(#${id}water)` }), /* @__PURE__ */ React.createElement("path", { d: `M${iso(u - b * 0.6, stern + 8, -1).join(" ")}q44-15 68-30M${iso(u + b * 0.6, stern + 1, -2).join(" ")}q46-19 70-43`, fill: "none", stroke: "#d1fff6", strokeWidth: docked ? 2 : 5, strokeLinecap: "round", opacity: docked ? 0.3 : 0.72 }), !docked && /* @__PURE__ */ React.createElement("path", { d: `M${iso(u, stern - 10, -2).join(" ")}l38-19m-9 13 18-8`, stroke: "#f2ffeb", strokeWidth: "2", strokeLinecap: "round", opacity: ".85" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([...top, ...water.slice().reverse()]), fill: "#b94747", stroke: "#1f4f71", strokeWidth: "1.7" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([top[1], top[2], top[3], water[3], water[2], water[1]]), fill: `url(#${id}hull)`, stroke: "#224b6c", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("path", { d: `M${water[1].join(" ")}L${water[2].join(" ")}L${water[3].join(" ")}`, fill: "none", stroke: "#fa7759", strokeWidth: "4" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(top), fill: accent, stroke: "#d1f4ee", strokeWidth: "1.6" }), /* @__PURE__ */ React.createElement("path", { d: `M${top[1].join(" ")}L${top[2].join(" ")}L${top[3].join(" ")}`, stroke: "#fffbdd", strokeWidth: "3", fill: "none" }), /* @__PURE__ */ React.createElement(Plane, { u: u - b / 2 + 5, v: stern + 5, w: b - 10, d: l - 22, z: 13, fill: "#f7e6be" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u - b / 2 + 6, v + 8, 13.3), iso(u + b / 2 - 6, v + 8, 13.3)), stroke: "#cfb887", strokeWidth: "1" }), /* @__PURE__ */ React.createElement(Box, { u: u - b / 2 + 5, v: stern + 7, w: b - 10, d: 25, h: 13, z: 13, top: "#fffbe7", left: "#e6f0e5", right: "#b4d9e3", stroke: "#3a718f", strokeWidth: "1" }), /* @__PURE__ */ React.createElement(Box, { u: u - b / 2 + 6, v: stern + 9, w: b - 12, d: 18, h: 13, z: 26, top: "#fffef0", left: "#f5faf0", right: "#b7dce4", stroke: "#44758f", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(front(u - b / 2 + 8, stern + 27.2, b - 16, 7, 29)), fill: "#2c6792", stroke: "#f6ffff", strokeWidth: ".9" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u - 3, stern + 27.4, 30), iso(u - 3, stern + 27.4, 36)), stroke: "#a1e3ee", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + 6, stern + 27.4, 30), iso(u + 6, stern + 27.4, 36)), stroke: "#a1e3ee", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([iso(u + b / 2 - 5, stern + 12, 29), iso(u + b / 2 - 5, stern + 23, 29), iso(u + b / 2 - 5, stern + 23, 36), iso(u + b / 2 - 5, stern + 12, 36)]), fill: "#4387b4", stroke: "#e4fbf8", strokeWidth: "1" }), /* @__PURE__ */ React.createElement(Box, { u: u - b / 2 + 3, v: stern + 7, w: b - 6, d: 22, h: 3, z: 39, top: "#f8ffed", left: "#d2e2dc", right: "#9cbfc9", stroke: "#467790", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement("path", { d: `M${iso(u + 1, stern + 16, 43).join(" ")}v-18m-7 5h14`, stroke: "#376981", strokeWidth: "2.3", fill: "none", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("path", { d: `M${iso(u + 1, stern + 16, 60).join(" ")}l11 4-11 3Z`, fill: "#ffb655" }), /* @__PURE__ */ React.createElement("ellipse", { cx: iso(u + 1, stern + 16, 54)[0], cy: iso(u + 1, stern + 16, 54)[1], rx: "6", ry: "2", fill: "#f9fff1", stroke: "#80a6b8", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("g", { transform: `translate(${iso(u + 8, stern + 29, 23).join(" ")})` }, /* @__PURE__ */ React.createElement("circle", { r: "4.7", fill: "#ff7953", stroke: "#fff4d7", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("circle", { r: "2", fill: "#d4e7e2" })), !small && /* @__PURE__ */ React.createElement(React.Fragment, null, [v - 1, v + 24].map((at, i) => {
+    const [tx, ty] = iso(u, at, 17);
+    return /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("path", { d: `M${tx - 10} ${ty - 7}v10a10 4.7 0 0 0 20 0v-10Z`, fill: fuelDark(fuel), stroke: "#47778a", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("path", { d: `M${tx - 9} ${ty - 4}v5a9 4.2 0 0 0 18 0v-5Z`, fill: accent }), /* @__PURE__ */ React.createElement("ellipse", { cx: tx, cy: ty - 7, rx: "10", ry: "4.7", fill: "#edfff0", stroke: "#6f9fa8", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("ellipse", { cx: tx - 2, cy: ty - 8, rx: "4", ry: "1.7", fill: "#fff9df" }));
+  }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u - 12, v - 10, 16), iso(u - 12, v + 36, 16)), stroke: "#fff8d8", strokeWidth: "3" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u - 12, v - 10, 16), iso(u + 5, v - 10, 16)), stroke: "#e2b96c", strokeWidth: "2" })), [v - 5, v + 20, v + 39].map((at, i) => /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("path", { d: `M${iso(u + b / 2 - 0.5, at, 12).join(" ")}v-5`, stroke: "#e7f8ec", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("ellipse", { cx: iso(u + b / 2 + 1, at, 7)[0], cy: iso(u + b / 2 + 1, at, 7)[1], rx: "2.7", ry: "4.2", fill: "#183f60", stroke: "#6d93a5", strokeWidth: ".8" }))), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + b / 2, v - 8, 17), iso(u + b / 2, v + l / 2 - 19, 17)), stroke: "#f1fff1", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement("circle", { cx: iso(u, bow - 8, 14)[0], cy: iso(u, bow - 8, 14)[1], r: "2.8", fill: "#fff5b2", stroke: "#bb9556", strokeWidth: ".6" }));
+}
+function Worker({ u, v, color = "#ffd15a", walking = false, delay = 0 }) {
+  const [x, y] = iso(u, v);
+  return /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y})`, strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("g", { className: walking ? "hs-worker-walk hs-animated" : void 0, style: { animationDelay: `${delay}s` } }, /* @__PURE__ */ React.createElement("ellipse", { cx: "3", cy: "2", rx: "6", ry: "2.6", fill: "#234e73", opacity: ".23" }), /* @__PURE__ */ React.createElement("path", { d: "M-2-5-3 0M2-5 3 0", stroke: "#2e5279", strokeWidth: "3" }), /* @__PURE__ */ React.createElement("path", { d: "M-4-10-5-6M4-10 5-6", stroke: "#edbc8e", strokeWidth: "2.4" }), /* @__PURE__ */ React.createElement("path", { d: "M-3-12h6v8H-3Z", fill: color, stroke: "#577b80", strokeWidth: ".7" }), /* @__PURE__ */ React.createElement("path", { d: "M-1-11v6M2-11v6", stroke: "#fff8c8", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("circle", { cy: "-15", r: "4.5", fill: "#f5c99a" }), /* @__PURE__ */ React.createElement("circle", { cx: "-1.5", cy: "-14.4", r: ".55", fill: "#425867" }), /* @__PURE__ */ React.createElement("circle", { cx: "1.6", cy: "-14.4", r: ".55", fill: "#425867" }), /* @__PURE__ */ React.createElement("path", { d: "M-1-12.8q1 1 2 0", stroke: "#b77b60", strokeWidth: ".65", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "M-4-15q0-6 4-6t4 6Z", fill: "#fff09a", stroke: "#c89e47", strokeWidth: ".7" }), /* @__PURE__ */ React.createElement("path", { d: "M-5-15H5", stroke: "#ffd44b", strokeWidth: "2" })));
+}
+function Truck({ u, v, color = "#ffbc4d", moving = true, delay = 0 }) {
+  const cargo = shade(color, 0.12);
+  return /* @__PURE__ */ React.createElement("g", { className: moving ? "hs-truck hs-animated" : void 0, style: { animationDelay: `${delay}s` } }, /* @__PURE__ */ React.createElement(Plane, { u: u + 3, v: v + 3, w: 44, d: 17, fill: "#1c4c72", opacity: ".19" }), /* @__PURE__ */ React.createElement(Box, { u, v, w: 39, d: 14, h: 4, z: 2, top: "#426d85", left: "#2f5274", right: "#244766", strokeWidth: "1" }), /* @__PURE__ */ React.createElement(Box, { u, v, w: 25, d: 14, h: 15, z: 6, top: shade(cargo, 0.25), left: cargo, right: shade(cargo, -0.2), stroke: shade(cargo, -0.4), strokeWidth: "1" }), [5, 10, 15, 20].map((at) => /* @__PURE__ */ React.createElement("path", { key: at, d: line(iso(u + at, v + 14, 8), iso(u + at, v + 14, 19)), stroke: shade(cargo, -0.2), strokeWidth: ".9" })), /* @__PURE__ */ React.createElement(Box, { u: u + 27, v, w: 13, d: 14, h: 16, z: 5, top: "#fff5da", left: "#f4f5e4", right: "#64b4cd", stroke: "#3f7090", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(front(u + 29, v + 14.2, 9, 7, 12)), fill: "#37799f", stroke: "#e3f9e9", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + 34, v + 14.4, 13), iso(u + 34, v + 14.4, 19)), stroke: "#aeeaf0", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("polygon", { points: pts([iso(u + 40.2, v + 2, 12), iso(u + 40.2, v + 11, 12), iso(u + 40.2, v + 11, 19), iso(u + 40.2, v + 2, 19)]), fill: "#2e789e" }), [5, 21, 34].map((at) => /* @__PURE__ */ React.createElement("g", { key: at }, /* @__PURE__ */ React.createElement("ellipse", { cx: iso(u + at, v + 15, 3)[0], cy: iso(u + at, v + 15, 3)[1], rx: "3.2", ry: "4.3", fill: "#213c59", stroke: "#234764", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement("ellipse", { cx: iso(u + at, v + 15, 3)[0], cy: iso(u + at, v + 15, 3)[1], rx: "1.3", ry: "2", fill: "#b1c7d0" }))), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + 40.5, v + 1, 7), iso(u + 40.5, v + 13, 7)), stroke: "#fff5bd", strokeWidth: "2" }));
+}
+function ControlTower({ u, v, active = true }) {
+  const [mx, my] = iso(u + 54, v + 34, 112);
+  return /* @__PURE__ */ React.createElement("g", { strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement(Plane, { u: u + 12, v: v + 12, w: 112, d: 72, fill: "#20466d", opacity: ".19" }), /* @__PURE__ */ React.createElement(Box, { u: u - 3, v: v - 3, w: 111, d: 75, h: 7, top: "#fff0ce", left: "#b6bcad", right: "#8cafbb", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement(Box, { u, v, w: 105, d: 69, h: 26, z: 6, top: "#fff7dd", left: "#eff0d9", right: "#88c0cd", strokeWidth: "1.3" }), [14, 36, 58, 80].map((at) => /* @__PURE__ */ React.createElement("polygon", { key: at, points: pts(front(u + at, v + 69.4, 13, 10, 14)), fill: "#478cba", stroke: "#f6fff2", strokeWidth: "1.2" })), /* @__PURE__ */ React.createElement(Box, { u: u + 25, v: v + 15, w: 56, d: 42, h: 65, z: 26, top: "#ebfff1", left: "#f8f7e6", right: "#81c1d5", stroke: "#3f7192", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(front(u + 34, v + 57.2, 8, 43, 38)), fill: "#94d9df", stroke: "#d9fff5", strokeWidth: "1.6" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(front(u + 49, v + 57.2, 8, 43, 38)), fill: "#77b9d1", stroke: "#d9fff5", strokeWidth: "1.6" }), /* @__PURE__ */ React.createElement(Box, { u: u + 15, v: v + 8, w: 76, d: 57, h: 19, z: 85, top: "#c9f4ec", left: "#3383b4", right: "#286d9f", stroke: "#2c5e84", strokeWidth: "1.7" }), [23, 41, 59, 77].map((at) => /* @__PURE__ */ React.createElement("polygon", { key: at, points: pts(front(u + at, v + 65.3, 12, 11, 90)), fill: "#93e0ed", stroke: "#d9fff1", strokeWidth: "1.2" })), /* @__PURE__ */ React.createElement(Box, { u: u + 11, v: v + 4, w: 84, d: 65, h: 6, z: 104, top: "#fcffdf", left: "#c2e1df", right: "#8fc0cf", stroke: "#497b97", strokeWidth: "1.3" }), /* @__PURE__ */ React.createElement(Plane, { u: u + 25, v: v + 14, w: 52, d: 43, z: 110.4, fill: "#65b4b0", stroke: "#edf9da", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("path", { d: `M${mx} ${my}v-28m-12 11h24M${mx} ${my - 23}l15 8-15 2`, fill: "none", stroke: "#f8ffed", strokeWidth: "3", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("ellipse", { cx: mx, cy: my - 28, rx: "8", ry: "3", fill: "#ffc75a", stroke: "#537790", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("circle", { cx: mx, cy: my - 34, r: "4.2", fill: active ? "#afff7d" : "#ffc65e", stroke: "#fff9da", strokeWidth: "1.5", className: active ? "hs-signal hs-animated" : "" }));
+}
+function HarborOffice({ u, v, active = false }) {
+  const [x, y] = iso(u + 48, v + 68, 28);
+  return /* @__PURE__ */ React.createElement("g", null, /* @__PURE__ */ React.createElement(Warehouse, { u, v, w: 95, d: 65, h: 39, color: "#c8dce5", roof: "#4a9ee5" }), /* @__PURE__ */ React.createElement(Box, { u: u + 27, v: v + 66, w: 43, d: 9, h: 5, z: 31, top: "#fff1c0", left: "#ffc56b", right: "#d58f50", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y})` }, /* @__PURE__ */ React.createElement("circle", { r: "13", fill: "#fff4d6", stroke: "#477e9a", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("path", { d: "m0-9 7 3v6c0 5-7 9-7 9s-7-4-7-9v-6Z", fill: active ? "#50cfab" : "#74a6c0", stroke: active ? "#2c9e84" : "#527f9e", strokeWidth: "1.2" }), active ? /* @__PURE__ */ React.createElement("path", { d: "m-4 0 3 3 6-6", fill: "none", stroke: "#fffbd5", strokeWidth: "2.3", strokeLinecap: "round" }) : /* @__PURE__ */ React.createElement("path", { d: "M-3-3H3V4H-3ZM-1-1H1M-1 1H1", fill: "none", stroke: "#e9f9ef", strokeWidth: "1.1" })), /* @__PURE__ */ React.createElement(Box, { u: u + 79, v: v + 65, w: 10, d: 9, h: 8, top: "#95c66f", left: "#dfad73", right: "#b88762", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement("circle", { cx: iso(u + 84, v + 70, 15)[0], cy: iso(u + 84, v + 70, 15)[1], r: "8", fill: "#7bd276", stroke: "#409b75", strokeWidth: "1" }));
+}
+function House({ x, y, s = 1, color = "#ff9669", warm = false, quiet = false }) {
+  return /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y}) scale(${s})`, strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("ellipse", { cx: "13", cy: "15", rx: "48", ry: "20", fill: "#164c6d", opacity: ".16" }), /* @__PURE__ */ React.createElement("path", { d: "m-33-8 32-17 38 19v34L5 45-33 26Z", fill: "#ffedc9", stroke: "#8da899", strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "M5 11 37-6v34L5 45Z", fill: "#d4dcb6" }), /* @__PURE__ */ React.createElement("path", { d: "m-41-11 39-35 47 23-40 34Z", fill: color, stroke: shade(color, -0.35), strokeWidth: "1.5" }), /* @__PURE__ */ React.createElement("path", { d: "m-41-11 46 22v7l-46-23Z", fill: shade(color, -0.1) }), /* @__PURE__ */ React.createElement("path", { d: "M-2-46 45-23 5 11Z", fill: shade(color, -0.15) }), /* @__PURE__ */ React.createElement("path", { d: "m-39-12 37-32 43 21", fill: "none", stroke: shade(color, 0.5), strokeWidth: "3", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("path", { d: "m-25 3 11 5v12l-11-5Z", fill: quiet ? "#87999d" : warm ? "#ffe18a" : "#5aa7c5", stroke: "#fffceb", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("path", { d: "m15 12 12-6v12l-12 6Z", fill: quiet ? "#819497" : warm ? "#ffcf72" : "#60a5bb", stroke: "#f9fbe2", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M-9 14 0 18v23l-9-4Z", fill: "#9b795b", stroke: "#f9e4bc", strokeWidth: "1.4" }), /* @__PURE__ */ React.createElement("path", { d: "m-18 3 0 12M21 10v11", stroke: "#fff5cf", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("path", { d: "M-15-37v-13l8 4v14Z", fill: "#edc59a", stroke: "#b88c6a", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("path", { d: "m-16-50 6-3 8 4-6 3Z", fill: "#ffead0" }));
+}
+function MarketStall({ u, v, w = 79, d = 44, color = "#f18668", open = true, worn = false, kind = 0 }) {
+  const roof = open ? color : worn ? "#8b9899" : "#a9b9b5", [sx, sy] = iso(u + w * 0.48, v + d + 5, 31);
+  return /* @__PURE__ */ React.createElement("g", { "data-testid": "harbor-market-stall", "data-open": open ? "true" : "false", "data-decor": "market" }, /* @__PURE__ */ React.createElement(Plane, { u: u + 7, v: v + 8, w: w + 11, d: d + 9, fill: "#31556c", opacity: ".16" }), /* @__PURE__ */ React.createElement(Box, { u: u - 2, v: v - 2, w: w + 4, d: d + 4, h: 4, top: worn ? "#c4bda8" : "#f4e1b6", left: "#b49e7b", right: "#9c9e8b", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement(Box, { u, v, w, d, h: 37, z: 4, top: "#fff1ce", left: worn ? "#c3c4b5" : "#fff1ce", right: worn ? "#a5b2ad" : "#d8dec0", stroke: "#768d84", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement(Box, { u: u - 5, v: v - 4, w: w + 10, d: d + 8, h: 7, z: 42, top: shade(roof, 0.28), left: roof, right: shade(roof, -0.2), stroke: shade(roof, -0.35), strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("polygon", { points: pts(front(u + 6, v + d + 0.3, w - 12, 25, 6)), fill: open ? "#507c88" : "#a1abaa", stroke: worn ? "#7c8f8e" : "#fff7dc", strokeWidth: "2" }), open ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Box, { u: u + 3, v: v + d, w: w - 6, d: 10, h: 5, z: 15, top: "#ffeac2", left: "#edc78e", right: "#c69c6b", strokeWidth: "1" }), [0, 1, 2, 3, 4].map((i) => /* @__PURE__ */ React.createElement("g", { key: i, transform: `translate(${iso(u + 13 + i * 12, v + d + 4, 22).join(" ")})` }, /* @__PURE__ */ React.createElement("ellipse", { cy: "2", rx: "5", ry: "2.7", fill: "#7c684e44" }), kind === 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("circle", { cy: "-2", r: "4", fill: i % 2 ? "#ffbb56" : "#f17e71" }), /* @__PURE__ */ React.createElement("path", { d: "M0-6q3-4 5-2", fill: "none", stroke: "#5da667", strokeWidth: "1.5" })) : kind === 1 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M-4-5h8l-1 9h-6Z", fill: i % 2 ? "#f9e2a5" : "#b5e5cf", stroke: "#fff4cb", strokeWidth: ".8" }), /* @__PURE__ */ React.createElement("path", { d: "M4-3q6 0 0 5", stroke: "#fff5d7", strokeWidth: "1.6", fill: "none" })) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M-4 2q-3-10 4-11 7 1 4 11Z", fill: i % 2 ? "#ffdf76" : "#efa882" }), /* @__PURE__ */ React.createElement("path", { d: "m-2-5 4 2m-4 0 4 2", stroke: "#fff0bd", strokeWidth: "1" })))), /* @__PURE__ */ React.createElement("polygon", { points: pts([iso(u - 4, v + d - 6, 37), iso(u + w + 4, v + d - 6, 37), iso(u + w + 4, v + d + 18, 28), iso(u - 4, v + d + 18, 28)]), fill: "#fff8df", stroke: "#e7d4ac", strokeWidth: ".8" }), [0, 2, 4, 6].map((i) => /* @__PURE__ */ React.createElement("polygon", { key: i, points: pts([iso(u - 4 + i * (w + 8) / 7, v + d - 6, 37), iso(u - 4 + (i + 1) * (w + 8) / 7, v + d - 6, 37), iso(u - 4 + (i + 1) * (w + 8) / 7, v + d + 18, 28), iso(u - 4 + i * (w + 8) / 7, v + d + 18, 28)]), fill: color })), [0, 1, 2, 3, 4, 5, 6].map((i) => /* @__PURE__ */ React.createElement("path", { key: i, d: `${line(iso(u - 4 + i * (w + 8) / 7, v + d + 18, 28), iso(u - 4 + (i + 1) * (w + 8) / 7, v + d + 18, 28))}`, stroke: i % 2 ? "#fff8df" : color, strokeWidth: "5", strokeLinecap: "round" })), /* @__PURE__ */ React.createElement("path", { d: `M${iso(u + 2, v + d + 16).join(" ")}v-28M${iso(u + w - 2, v + d + 16).join(" ")}v-28`, stroke: "#aa8c62", strokeWidth: "2.8" })) : /* @__PURE__ */ React.createElement(React.Fragment, null, [9, 14, 19, 24, 29].map((z) => /* @__PURE__ */ React.createElement("path", { key: z, d: line(iso(u + 6, v + d + 0.7, z), iso(u + w - 6, v + d + 0.7, z)), stroke: "#758d8d", strokeWidth: "1.1" })), /* @__PURE__ */ React.createElement("g", { transform: `translate(${sx} ${sy + 9})` }, /* @__PURE__ */ React.createElement("rect", { x: "-18", y: "-9", width: "36", height: "15", rx: "3", fill: worn ? "#d7cdb1" : "#f2dfb5", stroke: "#8c967f", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("text", { y: "1.5", fontSize: "8", textAnchor: "middle", fontWeight: "800", fill: "#667b76" }, worn ? "휴업" : "준비 중")), worn && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: line(iso(u + 10, v + d + 1, 7), iso(u + w - 10, v + d + 1, 31)), stroke: "#b39166", strokeWidth: "4" }), /* @__PURE__ */ React.createElement("path", { d: line(iso(u + 10, v + d + 1, 31), iso(u + w - 10, v + d + 1, 7)), stroke: "#c3a274", strokeWidth: "4" }))), /* @__PURE__ */ React.createElement("g", { transform: `translate(${iso(u + w / 2, v - 2, 52).join(" ")})` }, /* @__PURE__ */ React.createElement("rect", { x: "-15", y: "-14", width: "30", height: "19", rx: "7", fill: open ? "#fff5d1" : "#c4cbc0", stroke: "#9aaa8d", strokeWidth: "1" }), kind === 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M-5-2q-3-8 3-9l2 2 3-2q7 1 3 9-3 4-6 1-3 3-5-1Z", fill: open ? "#f28a6b" : "#859d92" }), /* @__PURE__ */ React.createElement("path", { d: "M1-10q3-5 6-2", stroke: "#5e9862", strokeWidth: "1.5", fill: "none" })) : kind === 1 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M-6-8H4L2 0H-4Z", fill: open ? "#73bea6" : "#839c94" }), /* @__PURE__ */ React.createElement("path", { d: "M5-7q7 0 0 6", stroke: "#819f8b", strokeWidth: "2", fill: "none" }), /* @__PURE__ */ React.createElement("path", { d: "M-8 2H6", stroke: "#b29c74", strokeWidth: "1.5" })) : /* @__PURE__ */ React.createElement("path", { d: "M-7 1q-3-13 6-14Q8-11 7 1Z", fill: open ? "#e9ad62" : "#98a896" })));
+}
+function Visitor({ u, v, color = "#f18782", hat = false, walking = false, delay = 0, small = false }) {
+  const [x, y] = iso(u, v);
+  return /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y}) scale(${small ? 0.75 : 1})`, "data-decor": "visitor" }, /* @__PURE__ */ React.createElement("g", { className: walking ? "hs-villager-walk hs-animated" : void 0, style: { animationDelay: `${delay}s` } }, /* @__PURE__ */ React.createElement("ellipse", { cx: "3", cy: "2", rx: "6", ry: "2.8", fill: "#315769", opacity: ".18" }), /* @__PURE__ */ React.createElement("path", { d: "M-2-4-3 0M2-4 3 0", stroke: "#3e627c", strokeWidth: "3", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("path", { d: "M-3-13Q0-16 4-12L5-5Q0-2-5-5Z", fill: color, stroke: "#778e89", strokeWidth: ".7" }), /* @__PURE__ */ React.createElement("path", { d: "M-4-11-6-7M4-11 6-8", stroke: "#eec396", strokeWidth: "2.4", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("circle", { cy: "-17", r: "5.2", fill: "#f5d1a5" }), /* @__PURE__ */ React.createElement("path", { d: "M-5-17q-1-8 5-8 6 0 5 8l-2-4-4 2-3-1Z", fill: "#6d6456" }), /* @__PURE__ */ React.createElement("circle", { cx: "-1.8", cy: "-16.3", r: ".65", fill: "#3e5b67" }), /* @__PURE__ */ React.createElement("circle", { cx: "1.8", cy: "-16.3", r: ".65", fill: "#3e5b67" }), /* @__PURE__ */ React.createElement("path", { d: "M-1.5-13.8q1.5 1.5 3 0", stroke: "#c2896b", strokeWidth: ".8", fill: "none" }), hat && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M-5-21q0-8 5-8t5 8Z", fill: "#f3d179" }), /* @__PURE__ */ React.createElement("ellipse", { cy: "-21", rx: "8", ry: "2.5", fill: "#ffe7a4" }), /* @__PURE__ */ React.createElement("path", { d: "M-4-22H4", stroke: "#dba66e", strokeWidth: "2" }))));
+}
+function FlowerBox({ u, v, w = 33, d = 13, full = true }) {
+  return /* @__PURE__ */ React.createElement("g", { "data-decor": "flowers" }, /* @__PURE__ */ React.createElement(Box, { u, v, w, d, h: 7, top: full ? "#7ebd6d" : "#bcaf8c", left: "#f0c88e", right: "#cba576", stroke: "#ab9979", strokeWidth: ".8" }), Array.from({ length: full ? 4 : 2 }, (_, i) => {
+    const [x, y] = iso(u + 5 + i * (w - 10) / 3, v + d / 2, 10);
+    return /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("path", { d: `M${x} ${y + 4}v-7m0 4-4-3m4 1 4-4`, stroke: full ? "#6d9e64" : "#aaa27d", strokeWidth: "1.5", strokeLinecap: "round" }), full && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("circle", { cx: x, cy: y - 6, r: "3.5", fill: ["#ffafbd", "#ffdc6b", "#f89573", "#c2a8ee"][i] }), /* @__PURE__ */ React.createElement("circle", { cx: x, cy: y - 6, r: "1.3", fill: "#fff3bf" })));
+  }));
+}
+function Bunting({ from, to, colorful = true }) {
+  const a = iso(...from), b = iso(...to);
+  return /* @__PURE__ */ React.createElement("g", { "data-decor": "bunting" }, /* @__PURE__ */ React.createElement("path", { d: `M${a[0]} ${a[1] + 40}v-44M${b[0]} ${b[1] + 40}v-44`, stroke: "#997f5b", strokeWidth: "3", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("path", { d: `M${a.join(" ")}Q${(a[0] + b[0]) / 2} ${(a[1] + b[1]) / 2 + 15} ${b.join(" ")}`, stroke: "#fff2c2", strokeWidth: "1.5", fill: "none" }), colorful && [0.1, 0.25, 0.4, 0.55, 0.7, 0.85].map((t, i) => {
+    const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t + 28 * t * (1 - t);
+    return /* @__PURE__ */ React.createElement("g", { key: i, transform: `translate(${x} ${y})` }, /* @__PURE__ */ React.createElement("path", { className: "hs-bunting-flag hs-animated", style: { animationDelay: `${i * -0.4}s` }, d: "M-5 0 5 0 0 11Z", fill: ["#f5937b", "#fff0b5", "#73cdb7", "#f0c968", "#9f91d7", "#69bed2"][i] }));
+  }));
+}
+function PicnicTable({ u, v, open = true, color = "#f28d76" }) {
+  const [x, y] = iso(u, v, 0);
+  return /* @__PURE__ */ React.createElement("g", { "data-decor": "cafe-table" }, /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y})` }, /* @__PURE__ */ React.createElement("ellipse", { cx: "2", cy: "5", rx: "21", ry: "9", fill: "#496c6940" }), /* @__PURE__ */ React.createElement("path", { d: "M0 4v-18M-12 6v-8M14 8V0", stroke: "#a08b68", strokeWidth: "2.8" }), /* @__PURE__ */ React.createElement("ellipse", { cy: "-13", rx: "14", ry: "7", fill: open ? "#fff1bd" : "#b4b8a2", stroke: "#baa782", strokeWidth: "1.2" }), /* @__PURE__ */ React.createElement("ellipse", { cx: "-13", cy: "-2", rx: "7", ry: "3.6", fill: "#d7b482" }), /* @__PURE__ */ React.createElement("ellipse", { cx: "15", cy: "0", rx: "7", ry: "3.6", fill: "#d7b482" }), open ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M0-13V-45", stroke: "#efddb3", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M-26-34 0-49 26-35 5-25Z", fill: color, stroke: "#b69372", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("path", { d: "M0-49 5-25 26-35Z", fill: "#fff4cf" }), /* @__PURE__ */ React.createElement("path", { d: "M-26-34 5-25v4l-31-8Z", fill: shade(color, -0.1) }), /* @__PURE__ */ React.createElement("path", { d: "m-4-15 3 1v-4l-3-1Z", fill: "#6cb89f" })) : /* @__PURE__ */ React.createElement("path", { d: "M0-15v-33l4 6-1 18Z", fill: "#a6b3a3", stroke: "#8e9d91", strokeWidth: "1.5" })));
+}
+function HarborCat({ u, v, resting = true }) {
+  const [x, y] = iso(u, v);
+  return /* @__PURE__ */ React.createElement("g", { transform: `translate(${x} ${y})`, "data-decor": "cat" }, /* @__PURE__ */ React.createElement("g", { className: "hs-cat-tail hs-animated" }, /* @__PURE__ */ React.createElement("path", { d: "M5-2q11 1 7-6", stroke: "#e6b16b", strokeWidth: "3", fill: "none", strokeLinecap: "round" })), /* @__PURE__ */ React.createElement("ellipse", { cy: "1", rx: "9", ry: "3.6", fill: "#5c776c26" }), /* @__PURE__ */ React.createElement("ellipse", { cx: "2", cy: "-3", rx: "7", ry: "4.2", fill: "#f1c184" }), /* @__PURE__ */ React.createElement("path", { d: "M-9-5-9-12-5-10-1-12 0-5Z", fill: "#f1c184" }), /* @__PURE__ */ React.createElement("path", { d: "m-8-7 2 1m2 0 2-1", stroke: "#835f45", strokeWidth: ".9", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("path", { d: "M-5-3h1", stroke: "#d08870", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("path", { d: "M2-6v5M6-5 5-1", stroke: "#dba76c", strokeWidth: "1.3" }));
+}
+function GroundWear({ u, v, w = 46, d = 22 }) {
+  const [x, y] = iso(u, v);
+  return /* @__PURE__ */ React.createElement("g", { "data-decor": "maintenance" }, /* @__PURE__ */ React.createElement(Plane, { u, v, w, d, fill: "#b6ad8f", opacity: ".34" }), /* @__PURE__ */ React.createElement("path", { d: `M${x + 6} ${y + 1}l11 5-4 6 12 5m-8-9 8-4`, stroke: "#8f9e89", strokeWidth: "1.2", fill: "none", opacity: ".55" }), [0, 1, 2].map((i) => /* @__PURE__ */ React.createElement("g", { key: i, transform: `translate(${x + 10 + i * 11} ${y + 18 + i * 3})` }, /* @__PURE__ */ React.createElement("path", { d: "M0 0-3-8M0 0 0-10M0 0 4-6", stroke: "#9fa37b", strokeWidth: "1.4", strokeLinecap: "round" }))));
+}
+
+// src/HarborScene.jsx
+var clamp4 = (n4, a, b) => Math.max(a, Math.min(b, n4));
+var n = (value) => Number(value || 0).toLocaleString("ko-KR", { maximumFractionDigits: 1 });
+var zoneLook = {
+  control: { short: "운항실", color: "#3389d1" },
+  methanol: { short: "메탄올", color: "#15a886" },
+  ammonia: { short: "암모니아", color: "#9464dc" },
+  operations: { short: "작업부두", color: "#eaa927" },
+  trust: { short: "인증센터", color: "#428fcc" },
+  link: { short: "공급연결", color: "#ef8351" },
+  anchorage: { short: "바깥바다", color: "#248ab7" }
+};
+function ZoneIcon({ id, color = "#ffffff" }) {
+  const shared = { fill: "none", stroke: color, strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" };
+  if (id === "methanol" || id === "ammonia") return /* @__PURE__ */ React2.createElement("g", { ...shared }, /* @__PURE__ */ React2.createElement("path", { d: "M0-8C-3-3-6 0-6 3a6 6 0 0 0 12 0C6 0 3-3 0-8Z" }), /* @__PURE__ */ React2.createElement("path", { d: "M-2 4q0 2 3 2" }));
+  if (id === "control") return /* @__PURE__ */ React2.createElement("g", { ...shared }, /* @__PURE__ */ React2.createElement("path", { d: "M-5 8V0H5V8M-7-5H7V0H-7ZM0-10V-5M-4-8H4M-2 3H2" }));
+  if (id === "operations") return /* @__PURE__ */ React2.createElement("g", { ...shared }, /* @__PURE__ */ React2.createElement("path", { d: "M-6 8V-7H6M-5-3 10-8M5-5V3M2 5H8M-8 8H-3" }), /* @__PURE__ */ React2.createElement("path", { d: "M-4-5 0-3-4 0" }));
+  if (id === "trust") return /* @__PURE__ */ React2.createElement("g", { ...shared }, /* @__PURE__ */ React2.createElement("path", { d: "M0-8 7-5V1Q6 7 0 9-6 7-7 1V-5Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m-3 0 2 3 5-6" }));
+  if (id === "link") return /* @__PURE__ */ React2.createElement("g", { ...shared }, /* @__PURE__ */ React2.createElement("path", { d: "m-2-6 3-3a4 4 0 0 1 6 6L4 0M2 6-1 9a4 4 0 0 1-6-6L-4 0M-3 3 3-3" }));
+  return /* @__PURE__ */ React2.createElement("g", { ...shared }, /* @__PURE__ */ React2.createElement("circle", { r: "8" }), /* @__PURE__ */ React2.createElement("path", { d: "m3-4-1 6-5 2 1-6Z" }));
+}
+function ZoneLabel({ zone, x, y, onSelect, selected, building, alert, visible }) {
+  const activate = () => onSelect?.({ kind: "zone", id: zone.id, category: zone.category, fuel: zone.fuel });
+  const look = zoneLook[zone.id], w = visible ? look.short.length * 13 + 42 : 36;
+  return /* @__PURE__ */ React2.createElement("g", { "data-testid": `scene-zone-${zone.id}`, role: "button", tabIndex: "0", "aria-label": `${zone.label}: ${zone.description}`, className: `hs-hotspot hs-zone-button ${selected ? "is-selected" : ""}`, onClick: activate, onKeyDown: (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      activate();
+    }
+  } }, /* @__PURE__ */ React2.createElement("title", null, zone.description), /* @__PURE__ */ React2.createElement("ellipse", { cx: zone.x, cy: zone.y - 8, rx: "62", ry: "53", fill: "#ffffff00", pointerEvents: "all" }), selected && /* @__PURE__ */ React2.createElement("polygon", { points: pts(quad(zone.u - 45, zone.v - 34, 90, 68, 2)), fill: "#fff49916", stroke: "#fff6b4", strokeWidth: "3", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${x} ${y})` }, /* @__PURE__ */ React2.createElement("path", { d: "m-5 17 5 6 5-6", fill: "#344e641f" }), /* @__PURE__ */ React2.createElement("rect", { x: -w / 2, y: "-13", width: w, height: "31", rx: "13", fill: "#194e6a26" }), /* @__PURE__ */ React2.createElement("rect", { className: "hs-zone-plaque", x: -w / 2, y: "-17", width: w, height: "31", rx: "13", fill: selected ? "#fff4be" : "#fffdf0", stroke: selected ? "#e8ba3e" : "#ffffff", strokeWidth: "2" }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${visible ? -w / 2 + 17 : 0} -2)` }, /* @__PURE__ */ React2.createElement("circle", { r: "11", fill: look.color }), /* @__PURE__ */ React2.createElement("g", { transform: "scale(.76)" }, /* @__PURE__ */ React2.createElement(ZoneIcon, { id: zone.id }))), visible && /* @__PURE__ */ React2.createElement("text", { x: -w / 2 + 34, y: "3", fill: "#254e64", fontSize: "12.5", fontWeight: "800" }, look.short), (building || alert) && /* @__PURE__ */ React2.createElement("g", { transform: `translate(${w / 2 - 1} -18)`, className: alert ? "hs-alert hs-animated" : "" }, /* @__PURE__ */ React2.createElement("circle", { cy: "2", r: "10", fill: "#b66f3633" }), /* @__PURE__ */ React2.createElement("circle", { r: "10", fill: building ? "#ffe05b" : "#ff795e", stroke: "#fff4d6", strokeWidth: "2" }), building ? /* @__PURE__ */ React2.createElement("path", { d: "M-4 0H4M0-4V4", stroke: "#64542b", strokeWidth: "2.2", strokeLinecap: "round" }) : /* @__PURE__ */ React2.createElement("text", { y: "4", textAnchor: "middle", fontSize: "14", fontWeight: "900", fill: "#fffaf0" }, "!")), /* @__PURE__ */ React2.createElement("g", { className: "hs-zone-rich", display: selected ? "inline" : "none", transform: "translate(0 -49)", pointerEvents: "none" }, /* @__PURE__ */ React2.createElement("rect", { x: "-87", y: "-27", width: "174", height: "48", rx: "13", fill: "#174a62", stroke: "#e4f4de", strokeWidth: "1.5" }), /* @__PURE__ */ React2.createElement("path", { d: "m-6 21 6 6 6-6", fill: "#174a62" }), /* @__PURE__ */ React2.createElement("text", { y: "-7", textAnchor: "middle", fill: "#fffde8", fontSize: "13", fontWeight: "800" }, zone.label), /* @__PURE__ */ React2.createElement("text", { y: "10", textAnchor: "middle", fill: "#c3eadf", fontSize: "10.5" }, zone.status === "market" ? "급유·유보 흐름 살펴보기" : zone.active ? "가동 중 · 눌러서 관리" : "눌러서 준비·투자 보기"))));
+}
+function Fence({ u, v, w = 50, d = 45, construction = true }) {
+  const edges = [[[u, v + d], [u + w, v + d]], [[u + w, v + d], [u + w, v]]];
+  return /* @__PURE__ */ React2.createElement("g", null, edges.map(([a, b], j) => /* @__PURE__ */ React2.createElement("g", { key: j }, /* @__PURE__ */ React2.createElement("path", { d: `M${iso(...a, 13).join(" ")}L${iso(...b, 13).join(" ")}`, stroke: construction ? "#f5c243" : "#f7efd6", strokeWidth: "5" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(...a, 13).join(" ")}L${iso(...b, 13).join(" ")}`, stroke: construction ? "#425a6c" : "#b5ba9e", strokeWidth: "5", strokeDasharray: construction ? "7 9" : "1 14" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(...a, 4).join(" ")}L${iso(...b, 4).join(" ")}`, stroke: construction ? "#f7cd64" : "#e8ddbd", strokeWidth: "2" }), [0, 0.5, 1].map((t) => /* @__PURE__ */ React2.createElement("path", { key: t, d: `M${iso(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, 0).join(" ")}v-18`, stroke: construction ? "#556675" : "#c3b491", strokeWidth: "3", strokeLinecap: "round" })))));
+}
+function Excavator({ x, y, working = false }) {
+  return /* @__PURE__ */ React2.createElement("g", { transform: `translate(${x} ${y})` }, /* @__PURE__ */ React2.createElement("ellipse", { cx: "4", cy: "5", rx: "21", ry: "9", fill: "#694e3c26" }), /* @__PURE__ */ React2.createElement("path", { d: "m-15-1 17-8 13 7-17 9Z", fill: "#3b5262", stroke: "#274658", strokeWidth: "3", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "m-15 0 13 7v6l-13-6ZM-2 7 15-1v6L-2 13Z", fill: "#3c4e5d" }), /* @__PURE__ */ React2.createElement("path", { d: "m-12-6 13-7 12 7-13 7Z", fill: "#ffe266", stroke: "#bd8934" }), /* @__PURE__ */ React2.createElement("path", { d: "m-12-6 12 7v-9l-12-7Z", fill: "#efb734" }), /* @__PURE__ */ React2.createElement("path", { d: "M-10-14 1-20 10-15-1-9Z", fill: "#fff0aa" }), /* @__PURE__ */ React2.createElement("path", { d: "M-10-14v-11l10-5 10 5v10L0-10Z", fill: "#f0be3c", stroke: "#aa8538" }), /* @__PURE__ */ React2.createElement("path", { d: "M-7-23 0-27v13l-7-3ZM2-26 7-23v8l-5 2Z", fill: "#285c83" }), /* @__PURE__ */ React2.createElement("g", { className: working ? "hs-excavator-arm hs-animated" : "" }, /* @__PURE__ */ React2.createElement("path", { d: "M10-13 23-28 36-13", stroke: "#b5832c", strokeWidth: "7", fill: "none", strokeLinecap: "round", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "M10-15 23-29 36-15", stroke: "#ffdb59", strokeWidth: "4", fill: "none", strokeLinecap: "round", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "m33-15 12 4-5 10-8-5Z", fill: "#cf9436", stroke: "#926f34", strokeWidth: "1.5" }), /* @__PURE__ */ React2.createElement("circle", { cx: "23", cy: "-28", r: "3", fill: "#6a6f5a" })));
+}
+function Construction({ project, selected, onSelect }) {
+  const { u, v } = project, operating = project.status === "operating", preparing = project.status === "planning";
+  const activate = () => onSelect?.({ kind: "project", id: project.id, category: project.category, fuel: project.fuel });
+  return /* @__PURE__ */ React2.createElement("g", { "data-testid": `scene-project-${project.id}`, "data-project-status": project.status, role: "button", tabIndex: "0", "aria-label": `${project.label}: ${operating ? "가동 중" : preparing ? "준비 중" : "공사 중"}, ${project.readyYear}년 가동`, className: `hs-hotspot hs-project ${selected ? "is-selected" : ""}`, onClick: activate, onKeyDown: (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      activate();
+    }
+  } }, /* @__PURE__ */ React2.createElement("title", null, `${project.label} · ${project.readyYear}년 가동 · ${n(project.cost)}억원`), /* @__PURE__ */ React2.createElement(Box, { u: u - 26, v: v - 24, w: 52, d: 48, h: 4, top: operating ? "#e4e7ca" : "#d3b984", left: "#b5a77f", right: "#a09476", stroke: selected ? "#fff298" : "#ad9d78", strokeWidth: selected ? 2.5 : 0.8 }), operating ? project.category === "supply" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Tank, { u, v: v - 2, r: 19, h: 34, fuel: project.fuel, small: true }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u, v + 7, 7).join(" ")}L${iso(u + 20, v + 7, 7).join(" ")}L${iso(u + 20, v + 24, 7).join(" ")}`, stroke: "#496d7e", strokeWidth: "6", fill: "none" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u, v + 7, 8).join(" ")}L${iso(u + 20, v + 7, 8).join(" ")}L${iso(u + 20, v + 24, 8).join(" ")}`, stroke: fuelColor(project.fuel), strokeWidth: "3", fill: "none" }), project.expanded && /* @__PURE__ */ React2.createElement(Tank, { u: u + 20, v: v - 13, r: 9, h: 19, fuel: project.extraFuel, small: true })) : project.category === "operations" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Box, { u: u - 15, v: v - 9, w: 28, d: 25, h: 21, top: "#ffe774", left: "#e5b133", right: "#c18c2b" }), /* @__PURE__ */ React2.createElement(Box, { u: u - 20, v: v - 13, w: 39, d: 30, h: 5, z: 22, top: "#fff2a2", left: "#f4c637", right: "#dcae31" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u + 15, v + 7, 24).join(" ")}v-35h24v24`, stroke: "#f3c644", strokeWidth: "5", fill: "none", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u + 15, v + 7, 25).join(" ")}v-33h24`, stroke: "#fff0a0", strokeWidth: "1.7", fill: "none" }), /* @__PURE__ */ React2.createElement(Plane, { u: u - 12, v: v + 17, w: 21, d: 9, fill: "#52b6a9" }), /* @__PURE__ */ React2.createElement("circle", { cx: project.x + 1, cy: project.y - 28, r: "3", fill: "#8bffa1" })) : project.category === "coordination" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Box, { u: u - 16, v: v - 15, w: 32, d: 30, h: 24, top: "#d3edf2", left: "#faf2d6", right: "#7eafc1" }), /* @__PURE__ */ React2.createElement(Box, { u: u - 18, v: v - 17, w: 36, d: 34, h: 7, z: 25, top: "#61b7e6", left: "#368cc9", right: "#326fa7" }), /* @__PURE__ */ React2.createElement("path", { d: `M${project.x} ${project.y - 35}v-19m-7 7h14`, stroke: "#f4f1d4", strokeWidth: "3" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: project.x + 8, cy: project.y - 36, rx: "9", ry: "5", fill: "#edf9f0", stroke: "#80a7b7", transform: `rotate(-30 ${project.x + 8} ${project.y - 36})` })) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Box, { u: u - 17, v: v - 14, w: 34, d: 28, h: 29, top: "#d8f0e3", left: "#fff8dd", right: "#92bfbb" }), /* @__PURE__ */ React2.createElement(Box, { u: u - 20, v: v - 17, w: 40, d: 34, h: 5, z: 30, top: "#8ed5ba", left: "#35b695", right: "#269b87" }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${project.x + 1} ${project.y - 23})` }, /* @__PURE__ */ React2.createElement("circle", { r: "8", fill: "#fff4c4", stroke: "#4c9c83" }), /* @__PURE__ */ React2.createElement("path", { d: "m-4 0 3 3 5-6", stroke: "#23967e", strokeWidth: "2.4", fill: "none" }))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Plane, { u: u - 18, v: v - 16, w: 35, d: 31, fill: "#b09364", stroke: "#c6a977" }), /* @__PURE__ */ React2.createElement(Plane, { u: u - 15, v: v - 13, w: 28, d: 24, fill: "#af926b" }), preparing ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Box, { u: u - 20, v: v - 18, w: 24, d: 10, h: 5, top: "#f2d58e", left: "#b29151", right: "#ae8c51" }), /* @__PURE__ */ React2.createElement(Box, { u: u - 17, v: v - 16, w: 24, d: 8, h: 4, z: 6, top: "#ffe3a4", left: "#c2a163", right: "#b79659" }), /* @__PURE__ */ React2.createElement(Plane, { u: u - 12, v: v - 16, w: 11, d: 11, z: 11, fill: "#b6e6ed" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u - 18, v + 1).join(" ")}v-32l15 5-15 5`, stroke: "#f5e1a9", strokeWidth: "2", fill: "#ff8f5b" })) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Box, { u: u - 14, v: v - 12, w: 26, d: 25, h: 13, top: "#d2d7c7", left: "#b4bdaf", right: "#8faba8" }), [[u - 18, v - 17], [u + 18, v - 17], [u + 18, v + 17], [u - 18, v + 17]].map(([a, b], i) => /* @__PURE__ */ React2.createElement("path", { key: i, d: `M${iso(a, b).join(" ")}v-45`, stroke: "#5f8290", strokeWidth: "3.7" })), [19, 39].map((z) => /* @__PURE__ */ React2.createElement("polygon", { key: z, points: pts(quad(u - 18, v - 17, 36, 34, z)), fill: "none", stroke: "#ffd45f", strokeWidth: "3", strokeLinejoin: "round" })), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u - 18, v + 17, 3).join(" ")}L${iso(u + 18, v + 17, 39).join(" ")}M${iso(u + 18, v + 17, 3).join(" ")}L${iso(u + 18, v - 17, 39).join(" ")}`, stroke: "#7297a1", strokeWidth: "2" })), /* @__PURE__ */ React2.createElement(Excavator, { x: project.x + 24, y: project.y + 8, working: !preparing }), /* @__PURE__ */ React2.createElement(Fence, { u: u - 26, v: v - 24, w: 52, d: 48 }), /* @__PURE__ */ React2.createElement("g", { fill: "#a18a63" }, /* @__PURE__ */ React2.createElement("ellipse", { cx: project.x - 19, cy: project.y + 4, rx: "9", ry: "4" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: project.x - 15, cy: project.y + 1, rx: "6", ry: "4" }))), (!operating || selected) && /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("rect", { x: project.x - 23, y: project.y + 28, width: "46", height: "6", rx: "3", fill: "#285168", stroke: "#fff2c9", strokeWidth: "1" }), /* @__PURE__ */ React2.createElement("rect", { x: project.x - 22, y: project.y + 29, width: 44 * (operating ? 1 : Math.max(0.08, project.progress)), height: "4", rx: "2", fill: operating ? "#7de9b2" : "#ffcf4b" })), selected && /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("rect", { x: project.x - 55, y: project.y - 76, width: "110", height: "26", rx: "10", fill: "#fff9df", stroke: "#e5c76f", strokeWidth: "2" }), /* @__PURE__ */ React2.createElement("text", { x: project.x, y: project.y - 59, textAnchor: "middle", fontSize: "12", fontWeight: "800", fill: "#32566a" }, operating ? "가동 중" : `${project.readyYear}년 가동`)));
+}
+function Hill({ x, y, s = 1, prefix, tone = 0 }) {
+  return /* @__PURE__ */ React2.createElement("g", { transform: `translate(${x} ${y}) scale(${s})` }, /* @__PURE__ */ React2.createElement("ellipse", { cx: "13", cy: "11", rx: "126", ry: "35", fill: "#2d8b7130" }), /* @__PURE__ */ React2.createElement("path", { d: "M-126 3Q-127-38-84-80L-44-134Q-13-173 28-137L80-84Q125-48 129-3 94 24 7 31-79 28-126 3Z", fill: `url(#${prefix}${tone ? "hill2" : "hill"})`, stroke: "#438b5a", strokeWidth: "1" }), /* @__PURE__ */ React2.createElement("path", { d: "M-15-150Q8-161 28-137L80-84Q125-48 129-3 92 23 7 31L24-30-5-78Z", fill: "#228657", opacity: ".33" }), /* @__PURE__ */ React2.createElement("path", { d: "M-109-25Q-99-65-61-90L-31-129Q-12-148 2-138L-20-102-61-64-79-20Z", fill: "#b2e985", opacity: ".52" }), /* @__PURE__ */ React2.createElement("path", { d: "M-86 10Q-45 21-3 20", fill: "none", stroke: "#bce88f", strokeWidth: "6", strokeLinecap: "round", opacity: ".45" }));
+}
+function Mainland({ prefix, life }) {
+  const quiet = ["quiet", "struggling", "closed"].includes(life.id), warm = life.id === "thriving";
+  const coast = "M-160-140H1980V174Q1894 238 1795 255T1625 291Q1562 337 1455 347L1335 302Q1244 347 1174 333L1098 308 1000 348 925 323Q866 355 807 337L708 289Q643 332 586 324L488 330Q410 377 338 363L255 351Q171 397 105 426L-160 467Z";
+  const coastalEdge = "M-160 467 105 426Q171 397 255 351L338 363Q410 377 488 330L586 324Q643 332 708 289L807 337Q866 355 925 323L1000 348 1098 308 1174 333Q1244 347 1335 302L1455 347Q1562 337 1625 291T1795 255Q1894 238 1980 174";
+  const treeGroups = [[46, 316, 0.83], [87, 324, 0.92], [117, 305, 0.68], [208, 255, 0.8], [245, 270, 0.68], [290, 244, 0.8], [388, 298, 0.68], [424, 282, 0.8], [453, 309, 0.62], [630, 250, 0.75], [670, 240, 0.96], [713, 260, 0.67], [844, 199, 0.91], [882, 207, 0.7], [921, 185, 0.85], [1073, 246, 0.76], [1110, 264, 0.62], [1369, 238, 0.84], [1407, 250, 0.7], [1461, 225, 0.86], [1691, 225, 0.76], [1731, 224, 0.89], [1771, 198, 0.69]];
+  return /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("path", { d: coast, transform: "translate(0 26)", fill: "#159cb4", stroke: "#62e1d3", strokeWidth: "49", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: coastalEdge, transform: "translate(0 28)", fill: "none", stroke: "#d8fff0", strokeWidth: "7", strokeLinecap: "round", opacity: ".8" }), /* @__PURE__ */ React2.createElement("path", { d: coast, transform: "translate(0 17)", fill: "#c19d67", stroke: "#bf9e6d", strokeWidth: "16", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: coast, fill: "#82c875", stroke: "#f5df9c", strokeWidth: "26", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: coastalEdge, fill: "none", stroke: "#ffedbe", strokeWidth: "5", strokeLinecap: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "M-80-20H1920V176Q1757 194 1580 142T1225 170Q1060 191 936 153T637 179Q449 216 285 169T-80 238Z", fill: "#8fd781" }), /* @__PURE__ */ React2.createElement(Hill, { x: 188, y: 209, s: 1.03, prefix }), /* @__PURE__ */ React2.createElement(Hill, { x: 393, y: 145, s: 0.88, prefix, tone: 1 }), /* @__PURE__ */ React2.createElement(Hill, { x: 1213, y: 144, s: 1.05, prefix }), /* @__PURE__ */ React2.createElement(Hill, { x: 1559, y: 187, s: 1.1, prefix, tone: 1 }), /* @__PURE__ */ React2.createElement("path", { d: "M-50 301C128 237 277 316 429 271S702 241 789 290 1044 248 1194 273 1510 223 1850 124", fill: "none", stroke: "#4a955f", strokeWidth: "33", strokeLinecap: "round", transform: "translate(0 5)" }), /* @__PURE__ */ React2.createElement("path", { d: "M-50 301C128 237 277 316 429 271S702 241 789 290 1044 248 1194 273 1510 223 1850 124", fill: "none", stroke: "#f0dfb0", strokeWidth: "31", strokeLinecap: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "M-50 301C128 237 277 316 429 271S702 241 789 290 1044 248 1194 273 1510 223 1850 124", fill: "none", stroke: "#607c8c", strokeWidth: "23", strokeLinecap: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "M-50 301C128 237 277 316 429 271S702 241 789 290 1044 248 1194 273 1510 223 1850 124", fill: "none", stroke: "#ffeaa9", strokeWidth: "2.5", strokeDasharray: "12 14" }), /* @__PURE__ */ React2.createElement("path", { d: "m458 244 105-35 59 33-97 44Z", fill: "#a5d98b" }), /* @__PURE__ */ React2.createElement("path", { d: "m1483 279 131-34 61 30-110 42Z", fill: "#9ed580" }), /* @__PURE__ */ React2.createElement(House, { x: 476, y: 239, s: 0.83, color: quiet ? "#b9a98d" : "#ff9369", warm, quiet }), /* @__PURE__ */ React2.createElement(House, { x: 555, y: 222, s: 0.82, color: quiet ? "#8babae" : "#589fe5", warm, quiet }), /* @__PURE__ */ React2.createElement(House, { x: 607, y: 260, s: 0.59, color: quiet ? "#b6ae8a" : "#f2c355", warm, quiet }), /* @__PURE__ */ React2.createElement(House, { x: 1532, y: 287, s: 0.82, color: quiet ? "#b39e8e" : "#f78161", warm, quiet }), /* @__PURE__ */ React2.createElement(House, { x: 1612, y: 265, s: 0.79, color: quiet ? "#92adb3" : "#64a9e1", warm, quiet }), treeGroups.map(([x, y, s], i) => /* @__PURE__ */ React2.createElement(Tree, { key: i, x, y, s, tone: i % 3 })), [[128, 395, 12], [295, 370, 9], [368, 381, 14], [995, 366, 10], [1376, 327, 11], [1765, 285, 14]].map(([x, y, r], i) => /* @__PURE__ */ React2.createElement("g", { key: i }, /* @__PURE__ */ React2.createElement("ellipse", { cx: x + 3, cy: y + 5, rx: r + 4, ry: r * 0.45, fill: "#1c82872b" }), /* @__PURE__ */ React2.createElement("path", { d: `M${x - r} ${y}q0 ${-r} ${r} ${-r * 0.8}l${r} ${r * 0.6}-${r * 0.4} ${r * 0.6}-${r * 1.3} 2Z`, fill: "#bdad89" }), /* @__PURE__ */ React2.createElement("path", { d: `M${x - r} ${y}l${r} ${-r * 0.8} ${r * 0.2} ${r * 0.6}Z`, fill: "#eee0b3" }))), /* @__PURE__ */ React2.createElement("g", { transform: "translate(1640 790)" }, /* @__PURE__ */ React2.createElement("ellipse", { cx: "0", cy: "19", rx: "114", ry: "49", fill: "#69e0cf", opacity: ".7" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: "0", cy: "19", rx: "104", ry: "42", fill: "none", stroke: "#cffff0", strokeWidth: "4", opacity: ".9" }), /* @__PURE__ */ React2.createElement("path", { d: "M-78 18Q-65-15-19-16 16-37 65-8L85 17V35L57 53-11 66-73 48Z", fill: "#bca576" }), /* @__PURE__ */ React2.createElement("path", { d: "M-78 18Q-65-15-19-16 16-37 65-8L85 17 57 38-11 50-73 34Z", fill: "#f2dca0" }), /* @__PURE__ */ React2.createElement("path", { d: "M-63 13Q-48-11-14-10 19-27 58-4L67 16 43 31-9 40-58 26Z", fill: "#8ed77d" }), /* @__PURE__ */ React2.createElement(Tree, { x: -35, y: 13, s: 0.72 }), /* @__PURE__ */ React2.createElement(Tree, { x: 27, y: -5, s: 0.59 }), /* @__PURE__ */ React2.createElement(Tree, { x: 51, y: 19, s: 0.63 }), /* @__PURE__ */ React2.createElement("ellipse", { cx: "6", cy: "29", rx: "21", ry: "9", fill: "#657f5940" }), /* @__PURE__ */ React2.createElement("path", { d: "M-10 27-5-34H12l5 61Q3 36-10 27Z", fill: "#fff6d5", stroke: "#f8e2b0" }), /* @__PURE__ */ React2.createElement("path", { d: "M-8 7q12 6 22 0l-1-16q-11 4-19 0Z", fill: "#f27d59" }), /* @__PURE__ */ React2.createElement("path", { d: "M-11-35h27v-13H-11Z", fill: "#3b7b9d", stroke: "#ffe8bd", strokeWidth: "3" }), /* @__PURE__ */ React2.createElement("path", { d: "M-16-48 2-62l19 14Z", fill: "#f27e5d", stroke: "#cb6449", strokeWidth: "1.5" }), /* @__PURE__ */ React2.createElement("path", { d: "M-9-36H14", stroke: "#fff5ce", strokeWidth: "4" }), /* @__PURE__ */ React2.createElement("path", { d: "M-6-46v9M2-46v9M10-46v9", stroke: "#9fe9e7", strokeWidth: "2" })), /* @__PURE__ */ React2.createElement("g", { className: "hs-gulls hs-animated", fill: "none", stroke: "#fffbe5", strokeWidth: "3", opacity: ".85", strokeLinecap: "round" }, /* @__PURE__ */ React2.createElement("path", { d: "M626 134q8-7 15 0 8-7 15 0M667 120q6-5 12 0 6-5 12 0M1438 439q8-7 15 0 8-7 15 0" })));
+}
+function Quay({ u, v, w, d, prefix, lavender = false }) {
+  return /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("polygon", { points: pts(quad(u + 9, v + 11, w + 8, d + 6, -22)), fill: "#126f952b" }), /* @__PURE__ */ React2.createElement(Box, { u, v, w, d, h: 24, z: -24, top: `url(#${prefix}${lavender ? "quayViolet" : "quay"})`, left: lavender ? "#a8a5aa" : "#b8aa88", right: lavender ? "#8e9bb2" : "#8c9e9c", stroke: "#697f83", strokeWidth: "1.2" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u, v + d).join(" ")}L${iso(u + w, v + d).join(" ")}L${iso(u + w, v).join(" ")}`, fill: "none", stroke: lavender ? "#f4e7ea" : "#fff0c6", strokeWidth: "6", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(u, v + d, -23).join(" ")}L${iso(u + w, v + d, -23).join(" ")}L${iso(u + w, v, -23).join(" ")}`, fill: "none", stroke: "#236f873e", strokeWidth: "3" }), Array.from({ length: Math.max(2, Math.floor(w / 42)) }, (_, i) => {
+    const t = (i + 0.5) * w / Math.max(2, Math.floor(w / 42));
+    const [x, y] = iso(u + t, v + d, -9);
+    return /* @__PURE__ */ React2.createElement("g", { key: i }, /* @__PURE__ */ React2.createElement("path", { d: `M${x} ${y - 7}v17`, stroke: "#7d897e", strokeWidth: "1" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: x, cy: y + 2, rx: "4", ry: "7", fill: "#32576c", stroke: "#667e84", strokeWidth: "2" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: x, cy: y + 2, rx: "1.3", ry: "3", fill: "#819494" }));
+  }), Array.from({ length: Math.max(2, Math.floor(d / 51)) }, (_, i) => {
+    const t = (i + 0.5) * d / Math.max(2, Math.floor(d / 51));
+    const [x, y] = iso(u + w, v + t, -10);
+    return /* @__PURE__ */ React2.createElement("g", { key: i }, /* @__PURE__ */ React2.createElement("ellipse", { cx: x, cy: y + 2, rx: "4", ry: "7", fill: "#31546b", stroke: "#6c858c", strokeWidth: "2" }));
+  }));
+}
+function DockLamp({ u, v, lit = false }) {
+  const [x, y] = iso(u, v);
+  return /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("ellipse", { cx: x + 2, cy: y + 1, rx: "7", ry: "3", fill: "#675f5124" }), /* @__PURE__ */ React2.createElement("path", { d: `M${x} ${y}v-25`, stroke: "#4d7181", strokeWidth: "3.3" }), lit && /* @__PURE__ */ React2.createElement("circle", { cx: x, cy: y - 28, r: "13", fill: "#fff9b1", opacity: ".28", className: "hs-lamp-glow hs-animated" }), /* @__PURE__ */ React2.createElement("path", { d: `M${x - 5} ${y - 26}h10v-5h-10Z`, fill: lit ? "#fff5a0" : "#a6c2bf", stroke: "#56818a", strokeWidth: "1.5" }), /* @__PURE__ */ React2.createElement("path", { d: `M${x - 7} ${y - 32}h14`, stroke: "#58818b", strokeWidth: "3", strokeLinecap: "round" }));
+}
+function Planter({ u, v, w = 43, d = 24, flowers = true }) {
+  const [x, y] = iso(u + w / 2, v + d / 2);
+  return /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement(Box, { u, v, w, d, h: 5, top: "#a2d57b", left: "#e8d7ab", right: "#cabb98" }), /* @__PURE__ */ React2.createElement(Tree, { x, y: y - 2, s: 0.45 }), flowers && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("circle", { cx: x - 9, cy: y + 2, r: "3", fill: "#ffcc64" }), /* @__PURE__ */ React2.createElement("circle", { cx: x + 8, cy: y + 7, r: "3", fill: "#ff9679" })));
+}
+function HarborPromenade({ life, prefix }) {
+  const busy = life.id === "thriving", wear = life.decor.wear > 0.45;
+  const stalls = Math.max(0, Math.min(3, life.decor.stalls));
+  const visitors = life.id === "thriving" ? 11 : life.id === "steady" ? 6 : life.id === "opening" ? 3 : life.id === "quiet" ? 2 : life.id === "struggling" ? 1 : 0;
+  return /* @__PURE__ */ React2.createElement("g", { "data-testid": "harbor-promenade", "data-market-open": stalls, "aria-label": "항구 마을. 상점과 주민은 운영 성과에 따른 분위기 연출입니다." }, /* @__PURE__ */ React2.createElement(Quay, { u: -170, v: 136, w: 153, d: 253, prefix }), /* @__PURE__ */ React2.createElement(Plane, { u: -159, v: 147, w: 130, d: 230, fill: wear ? "#c8c6a9" : "#eee4bc" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(-50, 149).join(" ")}L${iso(-50, 374).join(" ")}`, stroke: wear ? "#b6b7a1" : "#fff5ce", strokeWidth: "26", fill: "none" }), [0, 1, 2].map((i) => /* @__PURE__ */ React2.createElement(MarketStall, { key: i, u: -151, v: 152 + i * 76, w: 75, d: 43, color: ["#f18b75", "#53bfa7", "#e8bd58"][i], kind: i, open: i < stalls, worn: wear })), /* @__PURE__ */ React2.createElement(PicnicTable, { u: -49, v: 226, open: stalls > 0, color: "#7ac5ba" }), /* @__PURE__ */ React2.createElement(PicnicTable, { u: -48, v: 312, open: stalls > 1, color: "#f29383" }), life.decor.flags && /* @__PURE__ */ React2.createElement(Bunting, { from: [-159, 379, 42], to: [-27, 379, 42] }), /* @__PURE__ */ React2.createElement(FlowerBox, { u: -166, v: 210, w: 14, d: 34, full: life.decor.flowers }), /* @__PURE__ */ React2.createElement(FlowerBox, { u: -166, v: 287, w: 14, d: 34, full: life.decor.flowers }), wear && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(GroundWear, { u: -128, v: 374, w: 58, d: 10 }), /* @__PURE__ */ React2.createElement(GroundWear, { u: -57, v: 152, w: 23, d: 29 }), /* @__PURE__ */ React2.createElement(Box, { u: -75, v: 346, w: 21, d: 14, h: 8, top: "#bfb3a0", left: "#a29885", right: "#8e978b", strokeWidth: "1" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(-75, 348, 12).join(" ")}l16 5 0-7-15-4Z`, fill: "#9cae9e" })), [[-46, 185], [-53, 254], [-43, 344], [-83, 222], [-46, 287], [-104, 298], [-38, 367], [-80, 372], [-102, 219], [-102, 343], [-47, 164]].slice(0, visitors).map(([u, v], i) => /* @__PURE__ */ React2.createElement(Visitor, { key: i, u, v, color: ["#f38a83", "#69b8d5", "#ecc36c", "#9f93ce", "#78bf9e"][i % 5], hat: i % 3 === 0, walking: i % 3 === 1, delay: -i * 1.3, small: i === 5 || i === 8 })), /* @__PURE__ */ React2.createElement(HarborCat, { u: -85, v: 367 }), busy && /* @__PURE__ */ React2.createElement("g", { className: "hs-market-balloons hs-animated", transform: `translate(${iso(-151, 360, 0).join(" ")})` }, /* @__PURE__ */ React2.createElement("path", { d: "M0 0-7-48M0 0 6-55M0 0 17-43", stroke: "#f5ebc9", strokeWidth: "1.2" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: "-7", cy: "-51", rx: "7", ry: "10", fill: "#f6acb0", stroke: "#ffe4d5" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: "6", cy: "-59", rx: "7", ry: "10", fill: "#ffdd77", stroke: "#fff5bf" }), /* @__PURE__ */ React2.createElement("ellipse", { cx: "17", cy: "-46", rx: "7", ry: "10", fill: "#86d7c7", stroke: "#dffff0" })), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${iso(-100, 398, 0).join(" ")})` }, /* @__PURE__ */ React2.createElement("rect", { x: "-42", y: "-3", width: "84", height: "23", rx: "8", fill: wear ? "#dce0c9" : "#fff3cc", stroke: "#b0b89b", strokeWidth: "1.2" }), /* @__PURE__ */ React2.createElement("text", { x: "0", y: "12", fontSize: "10", fontWeight: "800", fill: "#6b856e", textAnchor: "middle" }, wear ? "조용한 항구 거리" : busy ? "북적이는 항구 거리" : "우리 항구 거리")));
+}
+function QuestPin({ quest, scene, positions, onSelect }) {
+  const zone = scene.zones.find((z) => z.id === quest?.zoneId);
+  if (!zone || ["complete", "missed", "locked"].includes(quest.status)) return null;
+  const [x, y] = positions[zone.id], activate = () => onSelect?.({ kind: "zone", id: zone.id, category: zone.category, fuel: zone.fuel });
+  return /* @__PURE__ */ React2.createElement("g", { "data-testid": "scene-quest-target", "data-zone": zone.id, role: "button", tabIndex: "0", className: "hs-hotspot hs-quest-marker", "aria-label": `목표 구역 살펴보기: ${quest.title}`, onClick: activate, onKeyDown: (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      activate();
+    }
+  } }, /* @__PURE__ */ React2.createElement("title", null, `${quest.title} · 목표 구역의 시설을 살펴봅니다. 퀘스트 진행은 왼쪽 행동 버튼을 이용하세요.`), /* @__PURE__ */ React2.createElement("ellipse", { cx: zone.x, cy: zone.y + 4, rx: "48", ry: "23", fill: "#ffe99014", stroke: "#ffe895", strokeWidth: "2.5", strokeDasharray: "6 6", className: "hs-quest-ring hs-animated", pointerEvents: "none" }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${x - 58} ${y - 35})` }, /* @__PURE__ */ React2.createElement("g", { className: "hs-quest-bob hs-animated" }, /* @__PURE__ */ React2.createElement("path", { d: "M-15-7a15 15 0 1 1 30 0c0 10-15 24-15 24S-15 3-15-7Z", fill: "#ffcf51", stroke: "#fff7da", strokeWidth: "3" }), /* @__PURE__ */ React2.createElement("path", { d: "m0-17 2.5 6 6.5.5-5 4.5 1.5 6.5L0-3-5.5.5-4-6l-5-4.5 6.5-.5Z", fill: "#fffbe5", stroke: "#bb852c", strokeWidth: ".75" })), /* @__PURE__ */ React2.createElement("text", { x: "0", y: "34", fontSize: "10", textAnchor: "middle", fontWeight: "900", fill: "#365e68", stroke: "#fff5cd", strokeWidth: "3", paintOrder: "stroke" }, "목표")));
+}
+function HarborWorld({ scene, services, prefix, selected, onSelect, labels, buildingMode, life, quest }) {
+  const methanol = services.methanol, ammonia = services.ammonia;
+  const trustActive = scene.zones.find((z) => z.id === "trust").active, linkActive = scene.zones.find((z) => z.id === "link").active;
+  const roadPoints = [[65, 122], [700, 122], [700, 279], [260, 279]];
+  const labelPositions = { control: [868, 282], trust: [1102, 367], methanol: [611, 392], ammonia: [1203, 624], operations: [892, 628], link: [1377, 514], anchorage: [464, 911] };
+  const colors = ["#f17858", "#4b9ed4", "#46b99b", "#eeb94f", "#a986cb"];
+  const yardCount = { opening: 9, quiet: 5, steady: 16, thriving: 24, struggling: 2, closed: 0 }[life.id] ?? 9;
+  const worn = life.decor.wear > 0.45;
+  const truckPositions = [[210, 122], [573, 122], [676, 210], [310, 279], [438, 122], [575, 279]];
+  const workerPositions = [[90, 440], [151, 590], [344, 340], [510, 275], [700, 320], [270, 121], [475, 286], [415, 591], [529, 122], [719, 363], [150, 478], [337, 612], [673, 478], [736, 230]];
+  return /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement(Mainland, { prefix, life }), /* @__PURE__ */ React2.createElement("path", { d: `M733 272C761 288 771 295 ${iso(145, 30).join(" ")}`, fill: "none", stroke: "#bcae88", strokeWidth: "45", transform: "translate(0 8)" }), /* @__PURE__ */ React2.createElement("path", { d: `M733 272C761 288 771 295 ${iso(145, 30).join(" ")}`, fill: "none", stroke: "#ffedbd", strokeWidth: "41" }), /* @__PURE__ */ React2.createElement("path", { d: `M733 272C761 288 771 295 ${iso(145, 30).join(" ")}`, fill: "none", stroke: "#607d8e", strokeWidth: "31" }), /* @__PURE__ */ React2.createElement("path", { d: `M733 272C761 288 771 295 ${iso(145, 30).join(" ")}`, fill: "none", stroke: "#fff1b8", strokeWidth: "2.5", strokeDasharray: "9 10" }), /* @__PURE__ */ React2.createElement(HarborPromenade, { life, prefix }), /* @__PURE__ */ React2.createElement(Quay, { u: -15, v: -12, w: 790, d: 425, prefix }), /* @__PURE__ */ React2.createElement(Plane, { u: 9, v: 10, w: 746, d: 91, fill: "#b1d992" }), /* @__PURE__ */ React2.createElement(Plane, { u: 17, v: 18, w: 718, d: 75, fill: "#c0e2a0" }), /* @__PURE__ */ React2.createElement("path", { d: `M${roadPoints.map((p) => iso(...p).join(" ")).join(" L")}`, fill: "none", stroke: "#f8e7b9", strokeWidth: "45", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: `M${roadPoints.map((p) => iso(...p).join(" ")).join(" L")}`, fill: "none", stroke: "#5f7c8a", strokeWidth: "35", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: `M${roadPoints.map((p) => iso(...p).join(" ")).join(" L")}`, fill: "none", stroke: "#f8dfa0", strokeWidth: "2.5", strokeDasharray: "12 12" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(110, 125).join(" ")}L${iso(110, 380).join(" ")}M${iso(548, 122).join(" ")}L${iso(548, 378).join(" ")}`, stroke: "#eaddb6", strokeWidth: "29", fill: "none" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(110, 125).join(" ")}L${iso(110, 380).join(" ")}M${iso(548, 122).join(" ")}L${iso(548, 378).join(" ")}`, stroke: "#738d94", strokeWidth: "21", fill: "none" }), [0, 1, 2, 3].map((i) => /* @__PURE__ */ React2.createElement(Plane, { key: i, u: 230 + i * 7, v: 104, w: 4, d: 36, fill: "#f4eac9" })), /* @__PURE__ */ React2.createElement(Plane, { u: 25, v: 250, w: 200, d: 135, fill: "#d7e5c6", stroke: "#fff2ce", strokeWidth: "4" }), /* @__PURE__ */ React2.createElement(Plane, { u: 555, v: 232, w: 182, d: 155, fill: ammonia.capacity > 0 ? "#d7d9df" : "#b6d88e", stroke: "#f9edc8", strokeWidth: "4" }), /* @__PURE__ */ React2.createElement(Plane, { u: 290, v: 150, w: 230, d: 116, fill: "#819799" }), /* @__PURE__ */ React2.createElement("g", { "data-testid": "decorative-yard", "data-cargo-count": yardCount, "aria-label": "작업장 활기. 상자 수는 분위기 표현이며 공급능력과 별개입니다." }, Array.from({ length: Math.min(15, yardCount) }, (_, i) => {
+    const row = Math.floor(i / 5), col = i % 5;
+    return /* @__PURE__ */ React2.createElement(Container, { key: i, u: 300 + col * 39, v: 157 + row * 30, color: worn ? "#8ca8a5" : colors[(row + col) % 5] });
+  }), Array.from({ length: Math.max(0, yardCount - 15) }, (_, i) => /* @__PURE__ */ React2.createElement(Container, { key: "top" + i, u: 305 + i % 5 * 39, v: 157 + Math.floor(i / 5) * 30, z: 16, color: colors[(i + 2) % 5] })), worn && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(GroundWear, { u: 339, v: 232, w: 93, d: 20 }), /* @__PURE__ */ React2.createElement(GroundWear, { u: 466, v: 167, w: 32, d: 41 }), /* @__PURE__ */ React2.createElement(Box, { u: 345, v: 187, w: 60, d: 30, h: 6, top: "#a6b6a7", left: "#819a97", right: "#788f8e" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(348, 193, 7).join(" ")}L${iso(395, 193, 7).join(" ")}`, stroke: "#c6cdb7", strokeWidth: "2", strokeDasharray: "4 3" }))), /* @__PURE__ */ React2.createElement(Warehouse, { u: 465, v: 24, w: 104, d: 65, h: 32, color: "#f6e7b5", roof: "#ed9366" }), /* @__PURE__ */ React2.createElement(ControlTower, { u: 95, v: 24, active: scene.zones.find((z) => z.id === "control").active }), /* @__PURE__ */ React2.createElement(HarborOffice, { u: 315, v: 24, active: trustActive }), /* @__PURE__ */ React2.createElement(Planter, { u: 221, v: 23, w: 58, d: 29, flowers: life.decor.flowers }), /* @__PURE__ */ React2.createElement(Planter, { u: 235, v: 68, w: 42, d: 23, flowers: life.decor.flowers }), /* @__PURE__ */ React2.createElement(Planter, { u: 574, v: 27, w: 30, d: 38, flowers: life.decor.flowers }), /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement(Plane, { u: 610, v: 12, w: 112, d: 88, fill: "#d9e3b6" }), /* @__PURE__ */ React2.createElement(Warehouse, { u: 638, v: 25, w: 63, d: 42, h: 23, roof: "#468fd2", color: "#ebdda8" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(700, 63, 12).join(" ")}L${iso(750, 63, 12).join(" ")}L1576 390 1679 350`, stroke: "#446d80", strokeWidth: "15", fill: "none", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(700, 63, 15).join(" ")}L${iso(750, 63, 15).join(" ")}L1576 387 1679 347`, stroke: linkActive ? "#6ee5b6" : "#adc3c2", strokeWidth: "9", fill: "none", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "m1575 391 0 24M1622 374v27", stroke: "#7b9f9b", strokeWidth: "5" }), /* @__PURE__ */ React2.createElement("circle", { cx: "1679", cy: "348", r: "9", fill: linkActive ? "#64d9ad" : "#9bbab7", stroke: "#e9f4d7", strokeWidth: "3" }), /* @__PURE__ */ React2.createElement("g", { transform: "translate(1695 326)" }, /* @__PURE__ */ React2.createElement("rect", { x: "0", y: "0", width: "76", height: "27", rx: "8", fill: "#f8edc5", stroke: "#bdb88a" }), /* @__PURE__ */ React2.createElement("text", { x: "38", y: "18", fill: "#3a746d", fontSize: "12", fontWeight: "800", textAnchor: "middle" }, "울산 연계"))), /* @__PURE__ */ React2.createElement(Quay, { u: 65, v: 402, w: 115, d: 263, prefix }), /* @__PURE__ */ React2.createElement(Plane, { u: 77, v: 420, w: 91, d: 225, fill: "#d9e5c5" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(120, 375, 3).join(" ")}L${iso(120, 627, 3).join(" ")}`, stroke: "#597f87", strokeWidth: "13" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(120, 375, 6).join(" ")}L${iso(120, 627, 6).join(" ")}`, stroke: "#75cbb3", strokeWidth: "8" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(80, 298, 5).join(" ")}L${iso(80, 377, 5).join(" ")}L${iso(156, 377, 5).join(" ")}L${iso(156, 298, 5).join(" ")}`, stroke: "#4b928f", strokeWidth: "7", fill: "none" }), /* @__PURE__ */ React2.createElement(Tank, { u: 80, v: 298, r: 28, h: 39, fuel: "methanol", ghost: !methanol.ready }), /* @__PURE__ */ React2.createElement(Tank, { u: 157, v: 298, r: 28, h: 39, fuel: "methanol", ghost: !methanol.ready }), /* @__PURE__ */ React2.createElement(Tank, { u: 120, v: 355, r: 30, h: 43, fuel: "methanol", ghost: !methanol.ready }), /* @__PURE__ */ React2.createElement(Warehouse, { u: 125, v: 451, w: 37, d: 30, h: 19, roof: "#48aaaf", color: "#f7e6b2" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(165, 506, 7).join(" ")}Q${iso(188, 510, 14).join(" ")} ${iso(199, 521, 8).join(" ")}`, stroke: "#244f68", strokeWidth: "7", fill: "none" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(165, 506, 7).join(" ")}Q${iso(188, 510, 14).join(" ")} ${iso(199, 521, 8).join(" ")}`, stroke: methanol.ready ? "#80e9b6" : "#a3bcb0", strokeWidth: "4", fill: "none", className: methanol.ready ? "hs-fuel-flow hs-animated" : "" }), /* @__PURE__ */ React2.createElement(Quay, { u: 325, v: 401, w: 160, d: 259, prefix }), /* @__PURE__ */ React2.createElement(Plane, { u: 338, v: 420, w: 135, d: 218, fill: "#c9d5ba" }), /* @__PURE__ */ React2.createElement(Plane, { u: 375, v: 414, w: 60, d: 218, fill: "#859ca0" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(405, 431).join(" ")}L${iso(405, 632).join(" ")}`, stroke: "#f9e8ad", strokeWidth: "2.5", strokeDasharray: "12 10" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(352, 420).join(" ")}L${iso(352, 638).join(" ")}M${iso(454, 420).join(" ")}L${iso(454, 638).join(" ")}`, stroke: "#e7b647", strokeWidth: "4" }), /* @__PURE__ */ React2.createElement(Container, { u: 350, v: 484, color: "#ee805c" }), /* @__PURE__ */ React2.createElement(Container, { u: 430, v: 513, color: "#55a6d2" }), /* @__PURE__ */ React2.createElement(Container, { u: 349, v: 571, color: "#e9bd48" }), /* @__PURE__ */ React2.createElement(Crane, { u: 340, v: 418, active: methanol.simops }), /* @__PURE__ */ React2.createElement(Crane, { u: 466, v: 548, active: methanol.simops || ammonia.simops, scale: 0.85 }), methanol.simops && /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("path", { d: `M${iso(425, 434, 3).join(" ")}L${iso(425, 610, 3).join(" ")}`, stroke: "#7ce9ac", strokeWidth: "4", strokeDasharray: "9 5", className: "hs-fuel-flow hs-animated" }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${iso(430, 616, 13).join(" ")})` }, /* @__PURE__ */ React2.createElement("circle", { r: "9", fill: "#3eb98d", stroke: "#f9f1c8", strokeWidth: "2" }), /* @__PURE__ */ React2.createElement("path", { d: "m-4 0 3 3 5-6", fill: "none", stroke: "#f8ffed", strokeWidth: "2.5" }))), ammonia.capacity > 0 ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Quay, { u: 600, v: 402, w: 120, d: 218, prefix, lavender: true }), /* @__PURE__ */ React2.createElement(Plane, { u: 613, v: 416, w: 94, d: 189, fill: "#ddd8e4" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(655, 364, 4).join(" ")}L${iso(655, 591, 4).join(" ")}`, stroke: "#7582a5", strokeWidth: "13" }), /* @__PURE__ */ React2.createElement("path", { d: `M${iso(655, 364, 7).join(" ")}L${iso(655, 591, 7).join(" ")}`, stroke: ammonia.ready ? "#c0a0ee" : "#adb3c6", strokeWidth: "8" }), /* @__PURE__ */ React2.createElement(Tank, { u: 605, v: 311, r: 28, h: 42, fuel: "ammonia", ghost: !ammonia.ready }), /* @__PURE__ */ React2.createElement(Tank, { u: 684, v: 311, r: 28, h: 42, fuel: "ammonia", ghost: !ammonia.ready }), /* @__PURE__ */ React2.createElement(Tank, { u: 645, v: 367, r: 27, h: 38, fuel: "ammonia", ghost: !ammonia.ready }), ammonia.ready && /* @__PURE__ */ React2.createElement("path", { d: `M${iso(707, 502, 6).join(" ")}Q${iso(734, 498, 13).join(" ")} ${iso(744, 508, 8).join(" ")}`, stroke: "#d9bdff", strokeWidth: "5", fill: "none", className: "hs-fuel-flow hs-animated" })) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Plane, { u: 581, v: 262, w: 140, d: 108, fill: "#c7d69e" }), /* @__PURE__ */ React2.createElement(Plane, { u: 590, v: 272, w: 121, d: 89, fill: "#c6bc91" }), /* @__PURE__ */ React2.createElement(Plane, { u: 605, v: 286, w: 91, d: 61, fill: "#d2c79a" }), /* @__PURE__ */ React2.createElement(Fence, { u: 581, v: 262, w: 140, d: 108, construction: false }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${iso(658, 320, 0).join(" ")})` }, /* @__PURE__ */ React2.createElement("path", { d: "M0 0v-33", stroke: "#a69b75", strokeWidth: "5" }), /* @__PURE__ */ React2.createElement("path", { d: "M-21-48H21V-22H-21Z", fill: "#b29dd6", stroke: "#f9eecb", strokeWidth: "3", strokeLinejoin: "round" }), /* @__PURE__ */ React2.createElement("path", { d: "M-7-35H7M0-42V-28", stroke: "#fff8de", strokeWidth: "3", strokeLinecap: "round" })), /* @__PURE__ */ React2.createElement(Tree, { x: iso(718, 250)[0], y: iso(718, 250)[1], s: 0.43 })), [[31, 384], [222, 382], [515, 383], [757, 380], [74, 644], [168, 635], [337, 644], [474, 639], ...ammonia.capacity > 0 ? [[610, 598], [710, 598]] : []].map(([u, v], i) => /* @__PURE__ */ React2.createElement(DockLamp, { key: i, u, v, lit: life.decor.brightness > 0.7 })), /* @__PURE__ */ React2.createElement("g", { "data-testid": "decorative-traffic", "data-count": Math.min(truckPositions.length, life.decor.trucks) }, truckPositions.slice(0, life.decor.trucks).map(([u, v], i) => /* @__PURE__ */ React2.createElement("g", { key: i, "data-decor": "truck" }, /* @__PURE__ */ React2.createElement(Truck, { u, v, color: colors[i % 5], delay: -i * 4.2 })))), /* @__PURE__ */ React2.createElement("g", { "data-testid": "decorative-workers", "data-count": Math.min(workerPositions.length, life.decor.workers) }, workerPositions.slice(0, life.decor.workers).map(([u, v], i) => /* @__PURE__ */ React2.createElement("g", { key: i, "data-decor": "worker" }, /* @__PURE__ */ React2.createElement(Worker, { u, v, color: i % 2 ? "#3bbbaa" : "#ffc443", walking: i % 2 === 0, delay: -i * 1.7 })))), /* @__PURE__ */ React2.createElement(Planter, { u: 26, v: 181, w: 42, d: 34, flowers: life.decor.flowers }), /* @__PURE__ */ React2.createElement(Planter, { u: 736, v: 159, w: 30, d: 42, flowers: life.decor.flowers }), life.decor.flowers && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(FlowerBox, { u: 266, v: 103, w: 39 }), /* @__PURE__ */ React2.createElement(FlowerBox, { u: 524, v: 103, w: 36 }), /* @__PURE__ */ React2.createElement(FlowerBox, { u: 737, v: 240, w: 14, d: 39 })), life.decor.flags && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(Bunting, { from: [276, 101, 42], to: [451, 101, 42] }), /* @__PURE__ */ React2.createElement(Bunting, { from: [336, 643, 35], to: [476, 643, 35] })), worn && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(GroundWear, { u: 214, v: 354, w: 50, d: 25 }), /* @__PURE__ */ React2.createElement(GroundWear, { u: 514, v: 353, w: 30, d: 30 }), /* @__PURE__ */ React2.createElement(GroundWear, { u: 743, v: 332, w: 14, d: 34 })), /* @__PURE__ */ React2.createElement("g", { stroke: "#d9fff1", strokeOpacity: ".52", strokeWidth: "3", strokeLinecap: "round", fill: "none" }, /* @__PURE__ */ React2.createElement("path", { d: "M180 680q73-36 134-16M1320 798q-25 22-56 35M690 985q30-20 61-31" }), /* @__PURE__ */ React2.createElement("path", { d: "M212 702q48-25 80-18M1310 820l-21 13" })), /* @__PURE__ */ React2.createElement("g", { transform: "translate(464 869)" }, /* @__PURE__ */ React2.createElement("ellipse", { cx: "0", cy: "8", rx: "16", ry: "6", fill: "#b3f9dc55" }), /* @__PURE__ */ React2.createElement("path", { d: "m-8 0 8-5 8 5-8 5Z", fill: "#f9c552" }), /* @__PURE__ */ React2.createElement("path", { d: "M0 1v-22", stroke: "#f9efd0", strokeWidth: "3" }), /* @__PURE__ */ React2.createElement("path", { d: "M1-23 13-18 1-13Z", fill: "#ff855d" })), scene.projects.map((project) => /* @__PURE__ */ React2.createElement(Construction, { key: project.id, project, selected: selected?.kind === "project" && selected.id === project.id, onSelect })), scene.ships.map((ship) => {
+    const activate = () => onSelect?.({ kind: "ship", id: ship.id, fuel: ship.fuel, category: "operations" });
+    return /* @__PURE__ */ React2.createElement("g", { key: ship.id, "data-testid": `scene-ship-${ship.id}`, "data-flow": ship.flow, role: "button", tabIndex: "0", "aria-label": ship.label, className: "hs-hotspot hs-vessel", onClick: activate, onKeyDown: (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        activate();
+      }
+    } }, /* @__PURE__ */ React2.createElement("title", null, `${ship.label} · 그림 한 척은 실제 선박 한 척이 아닙니다.`), /* @__PURE__ */ React2.createElement("g", { className: ship.docked ? "hs-docked-ship hs-animated" : ship.flow === "deferred" ? "hs-passing-ship hs-animated" : "hs-arriving-ship hs-animated", style: { animationDelay: ship.fuel === "ammonia" ? "-7s" : "-2s" } }, /* @__PURE__ */ React2.createElement(Ship, { ...ship })), /* @__PURE__ */ React2.createElement("ellipse", { cx: ship.x, cy: ship.y - 8, rx: "60", ry: "36", fill: "#ffffff00", pointerEvents: "all" }), selected?.kind === "ship" && selected.id === ship.id && /* @__PURE__ */ React2.createElement("g", { transform: `translate(${ship.x} ${ship.y - 80})` }, /* @__PURE__ */ React2.createElement("rect", { x: "-65", y: "-15", width: "130", height: "30", rx: "11", fill: "#fff5d1", stroke: "#d9bb6e", strokeWidth: "2" }), /* @__PURE__ */ React2.createElement("text", { x: "0", y: "5", textAnchor: "middle", fill: "#2f5e76", fontSize: "13", fontWeight: "800" }, ship.flow === "service" ? "급유 흐름" : "시장 유보 흐름")));
+  }), /* @__PURE__ */ React2.createElement("g", { className: "hs-zone-labels" }, scene.zones.map((zone) => /* @__PURE__ */ React2.createElement(ZoneLabel, { key: zone.id, zone, x: labelPositions[zone.id][0], y: labelPositions[zone.id][1], onSelect, selected: selected?.kind === "zone" && selected.id === zone.id, building: buildingMode && zone.id !== "anchorage", alert: quest?.zoneId !== zone.id && scene.alerts.some((a) => a.zoneId === zone.id), visible: labels }))), quest && /* @__PURE__ */ React2.createElement(QuestPin, { quest, scene, positions: labelPositions, onSelect }));
+}
+function WorldNetwork({ dashboard, prefix, onSelect, selected }) {
+  const positions = { korea: [1190, 360], singapore: [1040, 695], rotterdam: [495, 300], shanghai: [1070, 420] };
+  return /* @__PURE__ */ React2.createElement("g", null, /* @__PURE__ */ React2.createElement("g", { fill: "#8fd187", stroke: "#f6e5a8", strokeWidth: "8", strokeLinejoin: "round" }, /* @__PURE__ */ React2.createElement("path", { d: "m198 180 118-42 134 37 56 92-72 58-19 112-58 54-19-106-67-63-77-46Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m375 492 88 15 73 96-13 99-61 116-47-13-7-134-59-85Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m595 266 70-61 140-4 58-56 172-26 209 73 154 81-24 102-130 56-37 108-81 30-57-67-95-41-43-97-90-1-94-24Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m697 396 89 4 61 101-20 127-69 69-64-101-32-120Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m1249 686 106-41 77 66-17 91-115 22-62-61Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m996 643 78 17 38 37-18 31-95-29Z" }), /* @__PURE__ */ React2.createElement("path", { d: "m1307 383 10 49-16 44-15-16Z" })), /* @__PURE__ */ React2.createElement("g", { fill: "none", stroke: "#e2fff0", opacity: ".12", strokeWidth: "1" }, [220, 390, 560, 730, 900].map((y) => /* @__PURE__ */ React2.createElement("path", { key: y, d: `M90 ${y}H1690` })), [260, 510, 760, 1010, 1260, 1510].map((x) => /* @__PURE__ */ React2.createElement("path", { key: x, d: `M${x} 100V930` }))), dashboard.competition.filter((p) => p.id !== "korea").map((port) => {
+    const [x, y] = positions[port.id];
+    const [kx, ky] = positions.korea;
+    return /* @__PURE__ */ React2.createElement("path", { key: port.id, d: `M${kx} ${ky}Q${(kx + x) / 2} ${Math.min(y, ky) - 120} ${x} ${y}`, stroke: port.id === "singapore" ? "#fff4b5" : "#e5fff4", strokeWidth: "4", strokeDasharray: "10 10", opacity: ".9", fill: "none", className: "hs-world-route hs-animated" });
+  }), dashboard.competition.map((port) => {
+    const [x, y] = positions[port.id], chosen = selected?.kind === "rival" && selected.id === port.id, labelY = port.id === "shanghai" ? 62 : -62;
+    const activate = () => onSelect?.({ kind: "rival", id: port.id });
+    return /* @__PURE__ */ React2.createElement("g", { key: port.id, "data-testid": `scene-rival-${port.id}`, role: "button", tabIndex: "0", "aria-label": `${port.name}, 포획률 ${n(port.capture)}%`, className: "hs-hotspot", onClick: activate, onKeyDown: (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        activate();
+      }
+    } }, /* @__PURE__ */ React2.createElement("title", null, `${port.name} · ${port.profile} · 실제 모형 포획률 ${n(port.capture)}%`), /* @__PURE__ */ React2.createElement("ellipse", { cx: x + 3, cy: y + 11, rx: "22", ry: "11", fill: "#236b7940" }), /* @__PURE__ */ React2.createElement("circle", { cx: x, cy: y, r: chosen ? 24 : 19, fill: port.id === "korea" ? "#42c5a4" : "#f5c75c", stroke: "#fff4cf", strokeWidth: "4" }), /* @__PURE__ */ React2.createElement("path", { d: `M${x - 6} ${y + 2}h12l-3 5h-7ZM${x} ${y - 10}v11m0-10 6 7h-6Z`, fill: "#fff8e6" }), /* @__PURE__ */ React2.createElement("g", { transform: `translate(${x} ${y + labelY})` }, /* @__PURE__ */ React2.createElement("rect", { x: "-108", y: "-24", width: "216", height: "58", rx: "15", fill: "#205c762b" }), /* @__PURE__ */ React2.createElement("rect", { x: "-108", y: "-29", width: "216", height: "58", rx: "15", fill: chosen ? "#fff2b6" : "#fff9e2", stroke: "#ffffff", strokeWidth: chosen ? 3 : 2 }), /* @__PURE__ */ React2.createElement("text", { x: "0", y: "-7", textAnchor: "middle", fill: "#28566e", fontSize: "16", fontWeight: "850" }, port.name), /* @__PURE__ */ React2.createElement("text", { x: "0", y: "15", textAnchor: "middle", fill: "#4c7b88", fontSize: "13" }, "포획률 ", n(port.capture), "% · ", n(port.served), "기회")));
+  }), /* @__PURE__ */ React2.createElement("text", { x: "95", y: "150", fill: "#fff9da", fontSize: "32", fontWeight: "850", stroke: "#1a7d9733", strokeWidth: "1" }, "급유 경쟁망"), /* @__PURE__ */ React2.createElement("text", { x: "96", y: "184", fill: "#e9ffe8", fontSize: "16" }, "네 항만을 눌러 가동 역량과 준비 중인 사업을 살펴보세요"), /* @__PURE__ */ React2.createElement("g", { transform: "translate(96 915)" }, /* @__PURE__ */ React2.createElement("rect", { x: "-15", y: "-24", width: "650", height: "40", rx: "13", fill: "#24768b66" }), /* @__PURE__ */ React2.createElement("circle", { cx: "0", cy: "-5", r: "5", fill: "#f8e9b4" }), /* @__PURE__ */ React2.createElement("text", { x: "16", y: "0", fill: "#f3ffe7", fontSize: "14" }, "연결선은 게임의 비교 관계입니다. 실제 항로·선박 이동 경로를 뜻하지 않습니다.")));
+}
+function HarborScene({ state, dashboard: givenDashboard, preview, view = "harbor", selected = null, onSelect, motion = true, speed = 1, operationProgress = 0, buildingMode = false, labels = true, life: givenLife, quest: givenQuest }) {
+  const scene = useMemo(() => deriveHarbor(state), [state]);
+  const life = useMemo(() => givenLife || deriveHarborLife(state), [state, givenLife]);
+  const quest = useMemo(() => givenQuest === void 0 ? deriveQuestBoard(state).active : givenQuest, [state, givenQuest]);
+  const dashboard = useMemo(() => givenDashboard || getDashboard(state), [state, givenDashboard]);
+  const services = Object.fromEntries(dashboard.service.map((s) => [s.fuel, s]));
+  const prefix = `hs${useId2().replace(/:/g, "")}`;
+  const [camera, setCamera] = useState({ zoom: 1, x: 0, y: 0 });
+  const [surfaceAspect, setSurfaceAspect] = useState(null);
+  const svgRef = useRef(null), drag = useRef(null), suppressClick = useRef(false);
+  useEffect(() => {
+    setCamera({ zoom: 1, x: 0, y: 0 });
+  }, [view]);
+  useEffect(() => {
+    const measure = () => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (rect?.width > 0 && rect?.height > 0) {
+        const ratio = rect.width / rect.height;
+        setSurfaceAspect((previous) => previous !== null && Math.abs(previous - ratio) < 2e-3 ? previous : ratio);
+      }
+    };
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    if (observer && svgRef.current) observer.observe(svgRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+  const harborWidth = surfaceAspect ? Math.min(1460, 900 * surfaceAspect) : 1460;
+  const harborHeight = surfaceAspect ? harborWidth / surfaceAspect : 900;
+  const base = view === "region" ? { w: 1800, h: 1100, cx: 900, cy: 550 } : { w: harborWidth, h: harborHeight, cx: 930, cy: 600 };
+  const width = base.w / camera.zoom, height = base.h / camera.zoom;
+  const cx2 = clamp4(base.cx + camera.x, width / 2, 1800 - width / 2), cy = clamp4(base.cy + camera.y, height / 2, 1150 - height / 2);
+  const viewport = view === "world" ? "0 0 1800 1050" : `${cx2 - width / 2} ${cy - height / 2} ${width} ${height}`;
+  const zoom = (delta) => setCamera((c) => ({ ...c, zoom: clamp4(c.zoom + delta, view === "region" ? 1 : 0.82, 2.4) }));
+  const select = (selection) => {
+    if (!suppressClick.current) onSelect?.(selection);
+  };
+  useEffect(() => {
+    if (!selected || view === "world") return;
+    const collection = selected.kind === "zone" ? scene.zones : selected.kind === "project" ? scene.projects : selected.kind === "ship" ? scene.ships : [];
+    const target = collection.find((item) => item.id === selected.id);
+    if (!target) return;
+    setCamera((current) => {
+      const w = base.w / current.zoom, h = base.h / current.zoom;
+      const centerX = clamp4(base.cx + current.x, w / 2, 1800 - w / 2), centerY = clamp4(base.cy + current.y, h / 2, 1150 - h / 2);
+      const insetX = Math.min(105, w * 0.22), insetY = Math.min(130, h * 0.22);
+      if (target.x >= centerX - w / 2 + insetX && target.x <= centerX + w / 2 - insetX && target.y >= centerY - h / 2 + insetY && target.y <= centerY + h / 2 - insetY) return current;
+      return { ...current, x: clamp4(target.x, w / 2, 1800 - w / 2) - base.cx, y: clamp4(target.y, h / 2, 1150 - h / 2) - base.cy };
+    });
+  }, [selected?.kind, selected?.id, view, base.w, base.h]);
+  const down = (e) => {
+    if (view === "world" || e.button > 0 || e.target.closest?.('[role="button"]')) return;
+    drag.current = { pointer: e.pointerId, x: e.clientX, y: e.clientY, camera: { ...camera }, moved: false };
+    svgRef.current?.setPointerCapture?.(e.pointerId);
+  };
+  const move = (e) => {
+    if (!drag.current || drag.current.pointer !== e.pointerId) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect?.width) return;
+    const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.current.moved = true;
+    const scale = Math.min(rect.width / width, (rect.height || rect.width * height / width) / height);
+    const candidate = { ...drag.current.camera, x: drag.current.camera.x - dx / scale, y: drag.current.camera.y - dy / scale };
+    setCamera({ ...candidate, x: clamp4(base.cx + candidate.x, width / 2, 1800 - width / 2) - base.cx, y: clamp4(base.cy + candidate.y, height / 2, 1150 - height / 2) - base.cy });
+  };
+  const up = (e) => {
+    if (!drag.current) return;
+    suppressClick.current = drag.current.moved;
+    drag.current = null;
+    svgRef.current?.releasePointerCapture?.(e.pointerId);
+    setTimeout(() => {
+      suppressClick.current = false;
+    }, 0);
+  };
+  const keyboard = (e) => {
+    if (e.target !== e.currentTarget || view === "world") return;
+    if (e.key === "+" || e.key === "=" || e.key === "-") {
+      e.preventDefault();
+      zoom(e.key === "-" ? -0.2 : 0.2);
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      setCamera({ zoom: 1, x: 0, y: 0 });
+      return;
+    }
+    const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (direction) {
+      e.preventDefault();
+      setCamera((current) => ({ ...current, x: clamp4(base.cx + current.x + direction[0] * width * 0.15, width / 2, 1800 - width / 2) - base.cx, y: clamp4(base.cy + current.y + direction[1] * height * 0.15, height / 2, 1150 - height / 2) - base.cy }));
+    }
+  };
+  return /* @__PURE__ */ React2.createElement("div", { className: `hs-scene hs-mood-${life.id} ${motion ? "" : "hs-paused"} ${buildingMode ? "hs-building" : ""}`, "data-view": view, "data-life": life.id, "data-life-score": life.score, style: { "--hs-speed": speed, "--hs-progress": clamp4(operationProgress, 0, 1) } }, /* @__PURE__ */ React2.createElement("svg", { ref: svgRef, className: "hs-map", "data-testid": "harbor-svg", "data-view": view, "data-zoom": camera.zoom, "data-life": life.id, "data-life-score": life.score, xmlns: "http://www.w3.org/2000/svg", viewBox: viewport, preserveAspectRatio: "xMidYMid meet", role: "group", "aria-label": view === "world" ? "급유 경쟁망 지도" : "부산 친환경 항만 지도. 드래그 또는 방향키로 이동, 더하기와 빼기로 확대·축소.", onPointerDown: down, onPointerMove: move, onPointerUp: up, onPointerCancel: up, onKeyDown: keyboard, tabIndex: "0", fontFamily: "Noto Sans CJK KR, Noto Sans KR, Pretendard, sans-serif" }, /* @__PURE__ */ React2.createElement("defs", null, /* @__PURE__ */ React2.createElement("linearGradient", { id: `${prefix}ocean`, x1: "0", y1: "0", x2: ".52", y2: "1" }, /* @__PURE__ */ React2.createElement("stop", { offset: "0", stopColor: life.decor.wear > 0.45 ? "#9acbc2" : "#7de6cb" }), /* @__PURE__ */ React2.createElement("stop", { offset: ".31", stopColor: life.decor.wear > 0.45 ? "#6db2b9" : "#35c9cc" }), /* @__PURE__ */ React2.createElement("stop", { offset: ".7", stopColor: life.decor.wear > 0.45 ? "#4d9bb0" : "#23acd0" }), /* @__PURE__ */ React2.createElement("stop", { offset: "1", stopColor: life.decor.wear > 0.45 ? "#447e9a" : "#197db8" })), /* @__PURE__ */ React2.createElement("linearGradient", { id: `${prefix}hill`, x1: "0", y1: "0", x2: ".8", y2: "1" }, /* @__PURE__ */ React2.createElement("stop", { offset: "0", stopColor: "#b2e486" }), /* @__PURE__ */ React2.createElement("stop", { offset: ".4", stopColor: "#70c16a" }), /* @__PURE__ */ React2.createElement("stop", { offset: "1", stopColor: "#2f9e61" })), /* @__PURE__ */ React2.createElement("linearGradient", { id: `${prefix}hill2`, x1: "0", y1: "0", x2: "1", y2: "1" }, /* @__PURE__ */ React2.createElement("stop", { offset: "0", stopColor: "#a2de7b" }), /* @__PURE__ */ React2.createElement("stop", { offset: ".46", stopColor: "#5ebf72" }), /* @__PURE__ */ React2.createElement("stop", { offset: "1", stopColor: "#238958" })), /* @__PURE__ */ React2.createElement("pattern", { id: `${prefix}waves`, width: "184", height: "126", patternUnits: "userSpaceOnUse" }, /* @__PURE__ */ React2.createElement("path", { d: "M15 43q18-7 36 0M112 90q14-5 29 0", fill: "none", stroke: "#cefff0", strokeWidth: "2", strokeLinecap: "round", opacity: ".25" }), /* @__PURE__ */ React2.createElement("path", { d: "M76 21h7M79.5 17.5v7", stroke: "#d8fff1", strokeWidth: "1.2", opacity: ".25" })), /* @__PURE__ */ React2.createElement("pattern", { id: `${prefix}quay`, width: "72", height: "42", patternUnits: "userSpaceOnUse" }, /* @__PURE__ */ React2.createElement("rect", { width: "72", height: "42", fill: "#e9d9b4" }), /* @__PURE__ */ React2.createElement("path", { d: "M0 41H72M35 0V41", stroke: "#c0b799", strokeWidth: ".75", opacity: ".26" }), /* @__PURE__ */ React2.createElement("path", { d: "M8 10h13M51 31h8", stroke: "#fff2d1", strokeWidth: "2", opacity: ".42" }), /* @__PURE__ */ React2.createElement("circle", { cx: "60", cy: "8", r: "1", fill: "#ad9e7d", opacity: ".25" })), /* @__PURE__ */ React2.createElement("pattern", { id: `${prefix}quayViolet`, width: "72", height: "42", patternUnits: "userSpaceOnUse" }, /* @__PURE__ */ React2.createElement("rect", { width: "72", height: "42", fill: "#e4d9d6" }), /* @__PURE__ */ React2.createElement("path", { d: "M0 41H72M35 0V41", stroke: "#aaa6ad", strokeWidth: ".75", opacity: ".25" }), /* @__PURE__ */ React2.createElement("path", { d: "M8 10h13M51 31h8", stroke: "#fff1e9", strokeWidth: "2", opacity: ".45" }))), /* @__PURE__ */ React2.createElement("rect", { x: "-500", y: "-500", width: "2800", height: "2200", fill: `url(#${prefix}ocean)` }), /* @__PURE__ */ React2.createElement("rect", { x: "-500", y: "-500", width: "2800", height: "2200", fill: `url(#${prefix}waves)`, className: "hs-water hs-animated" }), view === "world" ? /* @__PURE__ */ React2.createElement(WorldNetwork, { dashboard, prefix, onSelect: select, selected }) : /* @__PURE__ */ React2.createElement(HarborWorld, { scene, services, prefix, selected, onSelect: select, labels, buildingMode, life, quest })), view !== "world" && /* @__PURE__ */ React2.createElement("div", { className: "hs-camera", "aria-label": "지도 배율" }, /* @__PURE__ */ React2.createElement("button", { type: "button", "data-testid": "map-zoom-in", "aria-label": "지도 확대", onClick: () => zoom(0.2), disabled: camera.zoom >= 2.4 }, "+"), /* @__PURE__ */ React2.createElement("button", { type: "button", "data-testid": "map-zoom-out", "aria-label": "지도 축소", onClick: () => zoom(-0.2), disabled: camera.zoom <= (view === "region" ? 1 : 0.82) }, "−"), /* @__PURE__ */ React2.createElement("span", null), /* @__PURE__ */ React2.createElement("button", { type: "button", "data-testid": "map-reset", "aria-label": "항만 지도 중심으로", onClick: () => setCamera({ zoom: 1, x: 0, y: 0 }) }, /* @__PURE__ */ React2.createElement("svg", { width: "19", height: "19", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.7", "aria-hidden": "true" }, /* @__PURE__ */ React2.createElement("path", { d: "M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" }), /* @__PURE__ */ React2.createElement("circle", { cx: "12", cy: "12", r: "3" })))), /* @__PURE__ */ React2.createElement("div", { className: "hs-scene-note" }, /* @__PURE__ */ React2.createElement("span", { className: "hs-scene-live-dot" }), view === "world" ? "게임 속 급유 경쟁 관계" : view === "region" ? "주변 지역 · 지형은 배경 표현" : `${life.label} · ${life.asOfYear ? life.asOfYear + "년 결산 기준" : "첫 운영을 기다리는 항만"}`, /* @__PURE__ */ React2.createElement("small", null, view === "world" ? "실제 항로 아님" : "사람·상점·상자는 분위기 연출")));
+}
+
+// src/legacy-panels.jsx
+import React3, { useEffect as useEffect2, useMemo as useMemo2, useRef as useRef2, useState as useState2 } from "react";
+var FUEL_LABELS = { common: "공통 역량", methanol: "메탄올", ammonia: "암모니아", both: "다연료" };
+var n2 = (value, digits = 1) => Number.isFinite(Number(value)) ? Number(value).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits }) : "—";
+var money = (value) => n2(value, Math.abs(Number(value || 0)) < 10 && Number(value || 0) !== Math.trunc(Number(value || 0)) ? 1 : 0);
+var signed2 = (value, digits = 1) => `${Number(value) > 0 ? "+" : ""}${n2(value, digits)}`;
+var fuelName = (fuel) => FUEL_LABELS[fuel] || fuel || "공통 역량";
+var clamp5 = (value) => Math.min(100, Math.max(0, Number(value) || 0));
+function Icon({ name, size = 20, className = "" }) {
+  const paths = {
+    anchor: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("circle", { cx: "12", cy: "5", r: "2" }), /* @__PURE__ */ React3.createElement("path", { d: "M12 7v14M7 11h10M3 14v3c2 3 5 4 9 4s7-1 9-4v-3M3 14l3 2M21 14l-3 2" })),
+    route: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("circle", { cx: "5", cy: "6", r: "2" }), /* @__PURE__ */ React3.createElement("circle", { cx: "19", cy: "18", r: "2" }), /* @__PURE__ */ React3.createElement("path", { d: "M7 6h8a4 4 0 0 1 0 8H9a4 4 0 0 0 0 8h8" })),
+    layers: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" })),
+    shield: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" }), /* @__PURE__ */ React3.createElement("path", { d: "m8 12 3 3 5-6" })),
+    ship: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "m3 13 9-3 9 3-3 7H6l-3-7ZM6 12V6h12v6M10 6V3h4v3M2 21c2 1 3 1 5 0 2 1 3 1 5 0 2 1 3 1 5 0 2 1 3 1 5 0" })),
+    clock: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React3.createElement("path", { d: "M12 7v5l3 2" })),
+    arrow: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "M4 12h15m-6-6 6 6-6 6" })),
+    download: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" })),
+    upload: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "M12 15V3m-5 5 5-5 5 5M4 16v5h16v-5" })),
+    info: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React3.createElement("path", { d: "M12 11v6M12 7h.01" })),
+    close: /* @__PURE__ */ React3.createElement("path", { d: "m6 6 12 12M6 18 18 6" }),
+    plus: /* @__PURE__ */ React3.createElement("path", { d: "M12 4v16M4 12h16" }),
+    check: /* @__PURE__ */ React3.createElement("path", { d: "m5 12 4 4L19 6" }),
+    chart: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "M4 3v17h17M7 14l4-5 4 3 5-7" })),
+    bank: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "m3 8 9-5 9 5H3ZM5 10v8m7-8v8m7-8v8M3 21h18M3 18h18" })),
+    alert: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "m12 3 10 18H2L12 3Z" }), /* @__PURE__ */ React3.createElement("path", { d: "M12 9v5m0 3h.01" })),
+    calendar: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("rect", { x: "3", y: "5", width: "18", height: "16", rx: "2" }), /* @__PURE__ */ React3.createElement("path", { d: "M7 3v4m10-4v4M3 10h18M7 14h3m4 0h3m-10 3h3" })),
+    target: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React3.createElement("circle", { cx: "12", cy: "12", r: "5" }), /* @__PURE__ */ React3.createElement("circle", { cx: "12", cy: "12", r: "1" })),
+    reset: /* @__PURE__ */ React3.createElement(React3.Fragment, null, /* @__PURE__ */ React3.createElement("path", { d: "M3 4v6h6M4 10a8 8 0 1 1 1 8" })),
+    chevron: /* @__PURE__ */ React3.createElement("path", { d: "m9 5 7 7-7 7" })
+  };
+  return /* @__PURE__ */ React3.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.7", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", className }, paths[name] || paths.anchor);
+}
+function Modal({ title, eyebrow, onClose, children, wide = false }) {
+  const panel = useRef2(null);
+  useEffect2(() => {
+    const previous = document.activeElement;
+    const priorOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    panel.current?.querySelector("button")?.focus();
+    const handle = (event) => {
+      if (event.key === "Escape") onClose();
+      if (event.key === "Tab" && panel.current) {
+        const items = Array.from(panel.current.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),[tabindex="0"]')).filter((item) => item.offsetParent !== null);
+        if (!items.length) return;
+        if (event.shiftKey && document.activeElement === items[0]) {
+          event.preventDefault();
+          items[items.length - 1].focus();
+        }
+        if (!event.shiftKey && document.activeElement === items[items.length - 1]) {
+          event.preventDefault();
+          items[0].focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", handle);
+    return () => {
+      document.body.style.overflow = priorOverflow;
+      document.removeEventListener("keydown", handle);
+      previous?.focus?.();
+    };
+  }, [onClose]);
+  return /* @__PURE__ */ React3.createElement("div", { className: "gp-modal-backdrop", onMouseDown: (event) => {
+    if (event.target === event.currentTarget) onClose();
+  } }, /* @__PURE__ */ React3.createElement("section", { ref: panel, className: `gp-modal ${wide ? "gp-modal-wide" : ""}`, role: "dialog", "aria-modal": "true", "aria-label": title }, /* @__PURE__ */ React3.createElement("header", { className: "gp-modal-head" }, /* @__PURE__ */ React3.createElement("div", null, eyebrow && /* @__PURE__ */ React3.createElement("span", { className: "gp-eyebrow" }, eyebrow), /* @__PURE__ */ React3.createElement("h2", null, title)), /* @__PURE__ */ React3.createElement("button", { type: "button", className: "gp-icon-button", onClick: onClose, "aria-label": "닫기" }, /* @__PURE__ */ React3.createElement(Icon, { name: "close" }))), children));
+}
+function Evidence({ onClose }) {
+  return /* @__PURE__ */ React3.createElement(Modal, { title: "연구 근거와 게임 가정", eyebrow: "MODEL NOTES", onClose }, /* @__PURE__ */ React3.createElement("div", { className: "gp-modal-body gp-evidence" }, /* @__PURE__ */ React3.createElement("p", { className: "gp-intro-note" }, "이 게임은 세 논문의 ", /* @__PURE__ */ React3.createElement("strong", null, "관계와 의사결정 구조"), "를 반영합니다. 화면의 사업비·기간·수요·계수는 게임용 설정이며, 원 연구의 정확한 재현이나 실제 항만의 예측값이 아닙니다."), /* @__PURE__ */ React3.createElement("article", null, /* @__PURE__ */ React3.createElement("span", { className: "gp-tag" }, "서비스와 선택"), /* @__PURE__ */ React3.createElement("h3", null, "LOGMS · Service Configuration Design"), /* @__PURE__ */ React3.createElement("p", null, "대기 관리, 작업 병행 가능성, 급유선 가용성이 서비스 성능을 바꾸고, 선박은 항만 선택 또는 급유 유보로 반응합니다."), /* @__PURE__ */ React3.createElement("p", { className: "gp-muted" }, "논문의 +7.5·+21.6·+18.2%p를 투자 버튼의 고정 효과로 사용하지 않습니다. 현재 역량과 수요 조건에서 결과를 다시 계산합니다.")), /* @__PURE__ */ React3.createElement("article", null, /* @__PURE__ */ React3.createElement("span", { className: "gp-tag" }, "연료 전환"), /* @__PURE__ */ React3.createElement("h3", null, "LNG Investment as Springboard or Stranded Asset?"), /* @__PURE__ */ React3.createElement("p", null, "공통 운영 역량은 다음 연료에도 활용할 수 있지만, 연료별 설비와 작업 준비는 별도로 필요합니다. 사업 범위를 넓히면 추가 준비와 비용이 발생합니다."), /* @__PURE__ */ React3.createElement("p", { className: "gp-muted" }, "0.9·0.4·0.3은 실제 원가 절감률이나 안전 승인 승계율로 적용하지 않습니다. CTS의 서술식과 결과표는 원 계산표의 정규화 확인이 필요합니다.")), /* @__PURE__ */ React3.createElement("article", null, /* @__PURE__ */ React3.createElement("span", { className: "gp-tag" }, "거래 조건"), /* @__PURE__ */ React3.createElement("h3", null, "Trust Infrastructure as Competitive Advantage"), /* @__PURE__ */ React3.createElement("p", null, "계량·전자 증빙·상호인정은 거래비용을 반영한 가격에 영향을 줍니다. 그 뒤 선박 선택을 다시 계산하므로 수요 보너스를 중복 가산하지 않습니다."), /* @__PURE__ */ React3.createElement("p", { className: "gp-muted" }, "부산 +0.52%는 상대 수요 증가율이며 포획률 %p가 아닙니다. 요코하마 메탄올의 입력계수와 결과표 차이는 원자료 확인 대상으로 남겨 두었습니다.")), /* @__PURE__ */ React3.createElement("details", { className: "gp-evidence-pending" }, /* @__PURE__ */ React3.createElement("summary", null, "원자료에서 확인이 남은 항목"), /* @__PURE__ */ React3.createElement("ul", null, /* @__PURE__ */ React3.createElement("li", null, /* @__PURE__ */ React3.createElement("strong", null, "LOGMS:"), " 보정 계수 전체, 선박 특성분포, 원 계산 코드가 제공되지 않아 원 논문의 수치 재현은 하지 않습니다."), /* @__PURE__ */ React3.createElement("li", null, /* @__PURE__ */ React3.createElement("strong", null, "LNG:"), " 서술된 CTS 식의 상한은 1.85인데 표에는 2.63·2.85가 제시됩니다. 정규화 또는 표 생성 기준을 확인할 때까지 초기 능력치로 쓰지 않습니다."), /* @__PURE__ */ React3.createElement("li", null, /* @__PURE__ */ React3.createElement("strong", null, "Trust:"), " 요코하마 0.4996% × 메탄올 계수 1.15는 0.57454%이지만 표는 0.69%입니다. 추가 보정이나 표 버전 확인이 필요합니다."))), /* @__PURE__ */ React3.createElement("h3", null, "화면의 숫자를 읽는 법"), /* @__PURE__ */ React3.createElement("dl", { className: "gp-definition-list" }, /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("dt", null, "급유 기회"), /* @__PURE__ */ React3.createElement("dd", null, "한 해에 발생하는 서비스 기회입니다. 실제 서로 다른 선박의 척수와 다르며, 소수는 모형의 기대값입니다.")), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("dt", null, "포획률"), /* @__PURE__ */ React3.createElement("dd", null, "전체 잠재 급유 기회 중 부산 거점에서 실제 수행한 비율입니다. 누적 성적은 기간 전체 수요로 가중합니다.")), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("dt", null, "시장 점유율"), /* @__PURE__ */ React3.createElement("dd", null, "유보를 제외하고 실제로 수행된 전체 급유에서 부산 거점이 차지한 비율입니다.")), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("dt", null, "유보"), /* @__PURE__ */ React3.createElement("dd", null, "이 기간에 서비스가 실행되지 않은 수요입니다. 최소 모형에서는 처리능력 초과분도 유보에 포함합니다.")), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("dt", null, "결과 분해"), /* @__PURE__ */ React3.createElement("dd", null, "게임 안의 조건을 바꿔 비교한 수치입니다. 실제 선박의 이동 기록이나 현실의 인과 추정값이 아닙니다.")), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("dt", null, "정책 재원과 순수입"), /* @__PURE__ */ React3.createElement("dd", null, "정책 재원은 영업매출과 구분합니다. 서비스 기여수입은 수행 실적에 연결된 게임용 순수입이며, 운영비와 투자비는 별도로 차감합니다."))), /* @__PURE__ */ React3.createElement("div", { className: "gp-note" }, /* @__PURE__ */ React3.createElement(Icon, { name: "info" }), /* @__PURE__ */ React3.createElement("span", null, "재현용 로그에는 시나리오·난수 시드·선택·사업 상태·연간 결과가 함께 저장됩니다. 게임 계수 조정 후의 결과를 기존 논문 수치와 동일하다고 해석하지 마세요."))), /* @__PURE__ */ React3.createElement("footer", { className: "gp-modal-foot" }, /* @__PURE__ */ React3.createElement("button", { className: "gp-button gp-button-primary", onClick: onClose }, "게임으로 돌아가기")));
+}
+function StatCard({ label: label2, value, unit, detail, icon, accent }) {
+  return /* @__PURE__ */ React3.createElement("div", { className: `gp-stat ${accent ? "gp-stat-accent" : ""}` }, /* @__PURE__ */ React3.createElement("div", { className: "gp-stat-label" }, /* @__PURE__ */ React3.createElement("span", null, label2), /* @__PURE__ */ React3.createElement(Icon, { name: icon, size: 18 })), /* @__PURE__ */ React3.createElement("div", { className: "gp-stat-value" }, value, /* @__PURE__ */ React3.createElement("small", null, unit)), /* @__PURE__ */ React3.createElement("p", null, detail));
+}
+function FuelBadge({ fuel }) {
+  return /* @__PURE__ */ React3.createElement("span", { className: `gp-fuel gp-fuel-${fuel || "common"}` }, fuelName(fuel));
+}
+function Allocation({ result }) {
+  const total = Number(result?.demand) || 1;
+  const parts = [{ id: "korea", label: "부산 거점", value: result?.served || 0 }, { id: "competitors", label: "경쟁항 합계", value: result?.competitorServed || 0 }, { id: "defer", label: "급유 유보", value: result?.deferred || 0 }];
+  return /* @__PURE__ */ React3.createElement("div", { className: "gp-allocation" }, /* @__PURE__ */ React3.createElement("div", { className: "gp-allocation-bar", "aria-label": "잠재 급유 기회의 배분" }, parts.map((part) => /* @__PURE__ */ React3.createElement("span", { key: part.id, className: `gp-allocation-${part.id}`, style: { width: `${clamp5(part.value / total * 100)}%` }, title: `${part.label}: ${n2(part.value)}기회` }))), /* @__PURE__ */ React3.createElement("div", { className: "gp-allocation-legend" }, parts.map((part) => /* @__PURE__ */ React3.createElement("span", { key: part.id }, /* @__PURE__ */ React3.createElement("i", { className: `gp-allocation-${part.id}` }), part.label, /* @__PURE__ */ React3.createElement("strong", null, n2(part.value / total * 100), "%")))));
+}
+function HistoryChart({ history }) {
+  if (!history.length) return /* @__PURE__ */ React3.createElement("div", { className: "gp-chart-empty" }, /* @__PURE__ */ React3.createElement(Icon, { name: "chart", size: 28 }), /* @__PURE__ */ React3.createElement("p", null, "첫 결산 뒤부터 매년의 포획률이 기록됩니다."));
+  const width = 660, height = 210, left = 37, right = 15, top = 18, bottom = 33;
+  const max = Math.max(20, Math.ceil(Math.max(...history.map((item) => Number(item.capture) || 0)) / 10) * 10);
+  const x = (year) => left + (Number(year) - 2026) / 14 * (width - left - right);
+  const y = (value) => top + (1 - Number(value) / max) * (height - top - bottom);
+  const line2 = history.map((item, index) => `${index ? "L" : "M"}${x(item.year)},${y(item.capture)}`).join(" ");
+  const area = `${line2} L${x(history[history.length - 1].year)},${height - bottom} L${x(history[0].year)},${height - bottom} Z`;
+  return /* @__PURE__ */ React3.createElement("div", { className: "gp-history-chart" }, /* @__PURE__ */ React3.createElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "연도별 실제 포획률 추이" }, /* @__PURE__ */ React3.createElement("defs", null, /* @__PURE__ */ React3.createElement("linearGradient", { id: "gpChartFill", x1: "0", y1: "0", x2: "0", y2: "1" }, /* @__PURE__ */ React3.createElement("stop", { stopColor: "#37d5a8", stopOpacity: ".24" }), /* @__PURE__ */ React3.createElement("stop", { offset: "1", stopColor: "#37d5a8", stopOpacity: "0" }))), [0, max / 2, max].map((value) => /* @__PURE__ */ React3.createElement("g", { key: value }, /* @__PURE__ */ React3.createElement("path", { d: `M${left} ${y(value)}H${width - right}`, stroke: "#28404f", strokeDasharray: "3 5" }), /* @__PURE__ */ React3.createElement("text", { x: left - 8, y: y(value) + 4, textAnchor: "end", fill: "#839aab", fontSize: "11" }, value, "%"))), [2026, 2030, 2035, 2040].map((year) => /* @__PURE__ */ React3.createElement("text", { key: year, x: x(year), y: height - 8, textAnchor: "middle", fill: "#839aab", fontSize: "11" }, year)), /* @__PURE__ */ React3.createElement("path", { d: area, fill: "url(#gpChartFill)" }), /* @__PURE__ */ React3.createElement("path", { d: line2, fill: "none", stroke: "#4de2b7", strokeWidth: "2.6", strokeLinejoin: "round" }), history.map((item) => /* @__PURE__ */ React3.createElement("circle", { key: item.year, cx: x(item.year), cy: y(item.capture), r: "3.5", fill: "#4de2b7", stroke: "#0c202d", strokeWidth: "2" }, /* @__PURE__ */ React3.createElement("title", null, item.year, "년 포획률 ", n2(item.capture), "%, 수행 ", n2(item.served), "기회")))));
+}
+function FinanceTable({ finance }) {
+  const entries = [["기초 현금", "openingCash", 0], ["정책 재원", "grant", 1], ["서비스 기여수입", "serviceContribution", 1], ["계약 이행 추가수입", "contractPremium", 1], ["사업 취소 환급", "refunds", 1], ["투자 집행", "investment", -1], ["운영비", "operatingCost", -1], ["계약 미이행 비용", "penalty", -1]];
+  return /* @__PURE__ */ React3.createElement("div", { className: "gp-finance-table" }, entries.map(([label2, key, sign]) => /* @__PURE__ */ React3.createElement("div", { key }, /* @__PURE__ */ React3.createElement("span", null, label2), /* @__PURE__ */ React3.createElement("strong", { className: sign < 0 && finance[key] > 0 ? "gp-negative" : "" }, sign !== 0 ? sign > 0 ? "+" : "−" : "", n2(finance[key] || 0), /* @__PURE__ */ React3.createElement("small", null, "억")))), /* @__PURE__ */ React3.createElement("div", { className: "gp-finance-total" }, /* @__PURE__ */ React3.createElement("span", null, "기말 현금"), /* @__PURE__ */ React3.createElement("strong", { className: finance.closingCash < 0 ? "gp-negative" : "" }, n2(finance.closingCash), /* @__PURE__ */ React3.createElement("small", null, "억"))));
+}
+function AnnualReport({ result, dashboard, onClose, finished }) {
+  const bridge = result.bridge || { start: 0, end: 0, components: [], method: "" };
+  const maxImpact = Math.max(1, ...(bridge.components || []).map((item) => Math.abs(item.value)));
+  return /* @__PURE__ */ React3.createElement(Modal, { wide: true, title: `${result.year}년 결산`, eyebrow: "ANNUAL PERFORMANCE", onClose }, /* @__PURE__ */ React3.createElement("div", { className: "gp-modal-body" }, /* @__PURE__ */ React3.createElement("div", { className: "gp-report-stats" }, /* @__PURE__ */ React3.createElement(StatCard, { label: "실제 수행", value: n2(result.served), unit: "기회", detail: `전체 잠재수요 ${n2(result.demand)}기회`, icon: "ship", accent: true }), /* @__PURE__ */ React3.createElement(StatCard, { label: "올해 포획률", value: n2(result.capture), unit: "%", detail: `실제 급유시장 점유율 ${n2(result.marketShare)}%`, icon: "target" }), /* @__PURE__ */ React3.createElement(StatCard, { label: "기간 누적 포획률", value: n2(dashboard.score.cumulativeCapture), unit: "%", detail: "기간 전체의 잠재수요로 가중", icon: "chart" })), /* @__PURE__ */ React3.createElement(Allocation, { result }), !!result.completedProjects?.length && /* @__PURE__ */ React3.createElement("div", { className: "gp-completion-note" }, /* @__PURE__ */ React3.createElement(Icon, { name: "check", size: 20 }), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("strong", null, "가동 상태에 반영된 사업"), /* @__PURE__ */ React3.createElement("p", null, result.completedProjects.join(" · ")))), /* @__PURE__ */ React3.createElement("div", { className: "gp-report-grid" }, /* @__PURE__ */ React3.createElement("section", { className: "gp-report-section" }, /* @__PURE__ */ React3.createElement("h3", null, "현금은 어디에 쓰였나요?"), /* @__PURE__ */ React3.createElement(FinanceTable, { finance: result.finance || {} })), /* @__PURE__ */ React3.createElement("section", { className: "gp-report-section" }, /* @__PURE__ */ React3.createElement("h3", null, "수행량은 왜 달라졌나요?"), /* @__PURE__ */ React3.createElement("div", { className: "gp-bridge-summary" }, /* @__PURE__ */ React3.createElement("span", null, "비교 시작 ", /* @__PURE__ */ React3.createElement("strong", null, n2(bridge.start))), /* @__PURE__ */ React3.createElement(Icon, { name: "arrow", size: 16 }), /* @__PURE__ */ React3.createElement("span", null, "비교 결과 ", /* @__PURE__ */ React3.createElement("strong", null, n2(bridge.end))), /* @__PURE__ */ React3.createElement("small", null, "급유 기회")), /* @__PURE__ */ React3.createElement("div", { className: "gp-bridge" }, (bridge.components || []).map((item, index) => /* @__PURE__ */ React3.createElement("div", { className: "gp-bridge-row", key: item.id || index }, /* @__PURE__ */ React3.createElement("span", null, item.label), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("i", { style: { width: `${Math.abs(item.value) / maxImpact * 100}%` }, className: item.value < 0 ? "is-negative" : "" })), /* @__PURE__ */ React3.createElement("strong", { className: item.value < 0 ? "gp-negative" : "gp-positive" }, signed2(item.value))))), /* @__PURE__ */ React3.createElement("p", { className: "gp-small gp-muted gp-method-note" }, bridge.method || "게임 내부 조건을 정해진 순서로 바꿔 비교한 결과입니다."), result.sources && /* @__PURE__ */ React3.createElement("div", { className: "gp-source-comparison" }, /* @__PURE__ */ React3.createElement("h4", null, "같은 시장에서 비교한 선택 변화"), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("span", null, "유보 감소분"), /* @__PURE__ */ React3.createElement("strong", null, signed2(result.sources.fromDeferral), "기회")), /* @__PURE__ */ React3.createElement("div", null, /* @__PURE__ */ React3.createElement("span", null, "경쟁항 수행 감소분"), /* @__PURE__ */ React3.createElement("strong", null, signed2(result.sources.fromCompetitors), "기회")), /* @__PURE__ */ React3.createElement("p", null, result.sources.method || "실제 선박 이동이 아닌, 동일한 시장 조건의 모형 비교입니다.")))), /* @__PURE__ */ React3.createElement("div", { className: "gp-report-section" }, /* @__PURE__ */ React3.createElement("h3", null, "연료별 실제 수행"), /* @__PURE__ */ React3.createElement("div", { className: "gp-table-scroll" }, /* @__PURE__ */ React3.createElement("table", { className: "gp-result-table" }, /* @__PURE__ */ React3.createElement("thead", null, /* @__PURE__ */ React3.createElement("tr", null, /* @__PURE__ */ React3.createElement("th", null, "연료"), /* @__PURE__ */ React3.createElement("th", null, "잠재수요"), /* @__PURE__ */ React3.createElement("th", null, "부산 수행"), /* @__PURE__ */ React3.createElement("th", null, "처리 여력"), /* @__PURE__ */ React3.createElement("th", null, "포획률"), /* @__PURE__ */ React3.createElement("th", null, "시장 유보"))), /* @__PURE__ */ React3.createElement("tbody", null, (result.byFuel || []).map((item) => /* @__PURE__ */ React3.createElement("tr", { key: item.fuel }, /* @__PURE__ */ React3.createElement("td", null, /* @__PURE__ */ React3.createElement(FuelBadge, { fuel: item.fuel })), /* @__PURE__ */ React3.createElement("td", null, n2(item.demand)), /* @__PURE__ */ React3.createElement("td", null, n2(item.served)), /* @__PURE__ */ React3.createElement("td", null, n2(item.capacity)), /* @__PURE__ */ React3.createElement("td", null, n2(item.capture), "%"), /* @__PURE__ */ React3.createElement("td", null, n2(item.deferred))))))), /* @__PURE__ */ React3.createElement("p", { className: "gp-small gp-muted" }, "물량 단위는 급유 기회입니다. 시장 유보에는 선택 유보와 처리능력 초과가 포함됩니다.")), !!result.contractResults?.length && /* @__PURE__ */ React3.createElement("div", { className: "gp-report-section" }, /* @__PURE__ */ React3.createElement("h3", null, "약속 이행"), result.contractResults.map((item) => /* @__PURE__ */ React3.createElement("div", { className: "gp-contract-result", key: item.id }, /* @__PURE__ */ React3.createElement("strong", null, item.label), /* @__PURE__ */ React3.createElement("span", null, n2(item.served), " / ", n2(item.required), "기회 이행"), /* @__PURE__ */ React3.createElement("span", { className: item.penalty > 0 ? "gp-negative" : "" }, "미이행 비용 ", money(item.penalty), "억")))), /* @__PURE__ */ React3.createElement("div", { className: "gp-report-grid" }, /* @__PURE__ */ React3.createElement("section", { className: "gp-report-section" }, /* @__PURE__ */ React3.createElement("h3", null, "이번 결과에서 읽을 것"), /* @__PURE__ */ React3.createElement("ul", { className: "gp-explanation-list" }, (result.explanations || []).map((text, index) => /* @__PURE__ */ React3.createElement("li", { key: index }, text)))), /* @__PURE__ */ React3.createElement("section", { className: "gp-report-section" }, /* @__PURE__ */ React3.createElement("h3", null, "경쟁항의 움직임"), result.aiActions?.length ? /* @__PURE__ */ React3.createElement("ul", { className: "gp-explanation-list" }, result.aiActions.map((text, index) => /* @__PURE__ */ React3.createElement("li", { key: index }, text))) : /* @__PURE__ */ React3.createElement("p", { className: "gp-muted" }, "이번 해 신규 사업 착수가 없습니다.")))), /* @__PURE__ */ React3.createElement("footer", { className: "gp-modal-foot" }, /* @__PURE__ */ React3.createElement("span", { className: "gp-small gp-muted" }, "계산에 반영된 상태를 바탕으로 작성된 결산입니다."), /* @__PURE__ */ React3.createElement("button", { className: "gp-button gp-button-primary", onClick: onClose, "data-testid": "close-report", "aria-label": finished ? "캠페인 성과 보기" : "다음 해" }, finished ? "캠페인 성과 보기" : `${dashboard.year}년 계획으로`, /* @__PURE__ */ React3.createElement(Icon, { name: "arrow", size: 17 }))));
+}
+
+// src/App.jsx
+var STORAGE_KEY = "green-port-v11-campaign";
+var VIEW_KEY = "green-port-v12-view";
+var DEFAULTS = { scenario: "window", difficulty: "normal", transition: "balanced", seed: 20261119 };
+var CATEGORIES = [
+  { id: "coordination", label: "운영 조정", icon: "radar" },
+  { id: "operations", label: "작업 수행", icon: "work" },
+  { id: "supply", label: "공급자산", icon: "build" },
+  { id: "trust", label: "거래 신뢰", icon: "shield" }
+];
+var FUELS3 = { common: "공통", methanol: "메탄올", ammonia: "암모니아", all: "전체" };
+var STATUS = { planning: "준비 중", construction: "공사 중", operating: "가동 중", cancelled: "취소", scheduled: "개시 대기", active: "이행 중", completed: "완료", failed: "미이행" };
+var n3 = (value, digits = 1) => Number(value || 0).toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+var money2 = (value) => n3(value, Number.isInteger(Number(value)) ? 0 : 1);
+var percent = (value) => n3(value) + "%";
+var signed3 = (value) => (value > 0 ? "+" : "") + n3(value);
+var cx = (...items) => items.filter(Boolean).join(" ");
+function Glyph({ name, size = 20 }) {
+  const paths = {
+    anchor: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "5", r: "2" }), /* @__PURE__ */ React4.createElement("path", { d: "M12 7v14M7 11h10M3 14v3c2 3 5 4 9 4s7-1 9-4v-3M3 14l3 2M21 14l-3 2" })),
+    build: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "M4 20h16M6 20V9h12v11M3 9h18M9 9V4h6v5M9 13h2m2 0h2m-6 4h2m2 0h2" })),
+    work: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "m4 15 7-7 5 5-7 7H4v-5ZM13 6l3-3 5 5-3 3M8 4l3 3M17 16l4 4" })),
+    radar: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "12", r: "5" }), /* @__PURE__ */ React4.createElement("path", { d: "m12 12 7-7M12 3v3M3 12h3M12 18v3M18 12h3" })),
+    shield: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" }), /* @__PURE__ */ React4.createElement("path", { d: "m8 12 3 3 5-6" })),
+    ship: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "m3 13 9-3 9 3-3 7H6l-3-7ZM6 12V6h12v6M10 6V3h4v3M2 21c2 1 3 1 5 0 2 1 3 1 5 0 2 1 3 1 5 0 2 1 3 1 5 0" })),
+    globe: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React4.createElement("ellipse", { cx: "12", cy: "12", rx: "4", ry: "9" }), /* @__PURE__ */ React4.createElement("path", { d: "M3 12h18M5 7h14M5 17h14" })),
+    book: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "M4 3h13a3 3 0 0 1 3 3v15H7a3 3 0 0 1-3-3V3ZM7 17h13M8 7h8M8 11h6" })),
+    mail: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("rect", { x: "3", y: "5", width: "18", height: "14", rx: "2" }), /* @__PURE__ */ React4.createElement("path", { d: "m4 7 8 6 8-6" })),
+    coin: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React4.createElement("path", { d: "M15 8h-4a2 2 0 0 0 0 4h2a2 2 0 0 1 0 4H9M12 6v12" })),
+    clock: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React4.createElement("path", { d: "M12 7v5l3 2" })),
+    close: /* @__PURE__ */ React4.createElement("path", { d: "m6 6 12 12M6 18 18 6" }),
+    check: /* @__PURE__ */ React4.createElement("path", { d: "m5 12 4 4L19 6" }),
+    arrow: /* @__PURE__ */ React4.createElement("path", { d: "M4 12h15m-6-6 6 6-6 6" }),
+    chevron: /* @__PURE__ */ React4.createElement("path", { d: "m9 5 7 7-7 7" }),
+    menu: /* @__PURE__ */ React4.createElement("path", { d: "M4 6h16M4 12h16M4 18h16" }),
+    pause: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "M8 4v16M16 4v16", strokeWidth: "4" })),
+    play: /* @__PURE__ */ React4.createElement("path", { d: "m7 4 13 8-13 8V4Z" }),
+    next: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "m4 5 10 7L4 19V5ZM19 5v14" })),
+    flag: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "M5 21V3M5 4c5-4 9 4 14 0v10c-5 4-9-4-14 0" })),
+    info: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "12", cy: "12", r: "9" }), /* @__PURE__ */ React4.createElement("path", { d: "M12 11v6M12 7h.01" })),
+    download: /* @__PURE__ */ React4.createElement("path", { d: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" }),
+    upload: /* @__PURE__ */ React4.createElement("path", { d: "M12 15V3m-5 5 5-5 5 5M4 16v5h16v-5" }),
+    reset: /* @__PURE__ */ React4.createElement("path", { d: "M3 4v6h6M4 10a8 8 0 1 1 1 8" }),
+    alert: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "m12 3 10 18H2L12 3Z" }), /* @__PURE__ */ React4.createElement("path", { d: "M12 9v5m0 3h.01" })),
+    leaf: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "M20 3C8 3 3 6 3 12a7 7 0 0 0 14 0c0-3 1-6 3-9Z" }), /* @__PURE__ */ React4.createElement("path", { d: "m3 21 12-12" })),
+    labels: /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "M4 4h16v12H9l-5 5V4Z" }), /* @__PURE__ */ React4.createElement("path", { d: "M8 8h8M8 12h5" }))
+  };
+  return /* @__PURE__ */ React4.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.75", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, paths[name] || paths.anchor);
+}
+function FuelTag({ fuel }) {
+  return /* @__PURE__ */ React4.createElement("span", { className: "pt-fuel pt-fuel-" + fuel }, FUELS3[fuel] || fuel);
+}
+function Button({ children, icon, primary, quiet, className, ...props }) {
+  return /* @__PURE__ */ React4.createElement("button", { type: "button", className: cx("pt-button", primary && "pt-button-primary", quiet && "pt-button-quiet", className), ...props }, icon && /* @__PURE__ */ React4.createElement(Glyph, { name: icon, size: 17 }), /* @__PURE__ */ React4.createElement("span", null, children));
+}
+function readSaved() {
+  try {
+    const raw = typeof window !== "undefined" && window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const result = importGame(raw);
+    return result.ok ? result.state : null;
+  } catch {
+    return null;
+  }
+}
+function readView() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(VIEW_KEY) || "{}");
+    return { motion: raw.motion !== false, labels: raw.labels !== false };
+  } catch {
+    return { motion: true, labels: true };
+  }
+}
+function reducedMotion() {
+  try {
+    return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+function BottomSheet({ title, eyebrow, onClose, children, wide = false }) {
+  const panel = useRef3(null);
+  const closeRef = useRef3(onClose);
+  closeRef.current = onClose;
+  useEffect3(() => {
+    const previous = document.activeElement;
+    panel.current?.querySelector('[data-testid="close-sheet"]')?.focus();
+    const key = (event) => {
+      if (event.key === "Escape") closeRef.current();
+    };
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("keydown", key);
+      if (previous?.isConnected) previous.focus?.();
+    };
+  }, []);
+  return /* @__PURE__ */ React4.createElement("section", { ref: panel, role: "dialog", "aria-modal": "false", "aria-label": title, className: cx("pt-sheet", wide && "pt-sheet-wide"), "data-testid": "context-sheet" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-sheet-handle", "aria-hidden": "true" }), /* @__PURE__ */ React4.createElement("header", { className: "pt-sheet-head" }, /* @__PURE__ */ React4.createElement("div", null, eyebrow && /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, eyebrow), /* @__PURE__ */ React4.createElement("h2", null, title)), /* @__PURE__ */ React4.createElement("button", { className: "pt-icon-button", "data-testid": "close-sheet", "aria-label": "현장으로 돌아가기", onClick: onClose }, /* @__PURE__ */ React4.createElement(Glyph, { name: "close" }))), /* @__PURE__ */ React4.createElement("div", { className: "pt-sheet-body" }, children));
+}
+function Welcome({ settings, setSettings, hasGame, onStart, onContinue, onImport, notifications }) {
+  return /* @__PURE__ */ React4.createElement("section", { className: "pt-welcome", "aria-label": "새 캠페인 설정" }, /* @__PURE__ */ React4.createElement("span", { className: "pt-welcome-kicker" }, /* @__PURE__ */ React4.createElement("i", null), " BUILD YOUR GREEN HARBOR"), /* @__PURE__ */ React4.createElement("h1", null, "당신의 항만에", /* @__PURE__ */ React4.createElement("br", null), /* @__PURE__ */ React4.createElement("em", null, "다음 기회"), "가 들어옵니다."), /* @__PURE__ */ React4.createElement("p", null, "바다 위의 움직임을 읽고, 필요한 곳을 눌러보세요.", /* @__PURE__ */ React4.createElement("br", null), "어떤 시설을 먼저 갖추느냐가 항만의 미래를 바꿉니다."), notifications, /* @__PURE__ */ React4.createElement("div", { className: "pt-start-scenarios", role: "group", "aria-label": "처음 해결할 병목" }, SCENARIOS.map((item, index) => /* @__PURE__ */ React4.createElement("button", { key: item.id, type: "button", className: settings.scenario === item.id ? "is-selected" : "", "aria-pressed": settings.scenario === item.id, onClick: () => setSettings({ ...settings, scenario: item.id }) }, /* @__PURE__ */ React4.createElement("span", { className: "pt-scenario-number" }, "0", index + 1), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, item.label), /* @__PURE__ */ React4.createElement("small", null, item.description)), /* @__PURE__ */ React4.createElement("i", null, /* @__PURE__ */ React4.createElement(Glyph, { name: settings.scenario === item.id ? "check" : "chevron", size: 15 }))))), /* @__PURE__ */ React4.createElement("details", { className: "pt-start-settings" }, /* @__PURE__ */ React4.createElement("summary", null, "난이도·연료 전망 설정 ", /* @__PURE__ */ React4.createElement("span", null, DIFFICULTIES.find((d) => d.id === settings.difficulty)?.label)), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("label", { htmlFor: "pt-difficulty" }, "경영 난이도", /* @__PURE__ */ React4.createElement("select", { id: "pt-difficulty", value: settings.difficulty, onChange: (e) => setSettings({ ...settings, difficulty: e.target.value }) }, DIFFICULTIES.map((item) => /* @__PURE__ */ React4.createElement("option", { key: item.id, value: item.id }, item.label)))), /* @__PURE__ */ React4.createElement("label", { htmlFor: "pt-transition" }, "연료 전환 전망", /* @__PURE__ */ React4.createElement("select", { id: "pt-transition", value: settings.transition, onChange: (e) => setSettings({ ...settings, transition: e.target.value }) }, TRANSITIONS.map((item) => /* @__PURE__ */ React4.createElement("option", { key: item.id, value: item.id }, item.label)))), /* @__PURE__ */ React4.createElement("label", { htmlFor: "pt-seed" }, "재현 시드", /* @__PURE__ */ React4.createElement("input", { id: "pt-seed", type: "number", min: "1", max: "2147483647", step: "1", value: settings.seed, onChange: (e) => setSettings({ ...settings, seed: e.target.value }) })))), /* @__PURE__ */ React4.createElement(Button, { primary: true, icon: "play", className: "pt-start-button", "data-testid": "setup-start", onClick: onStart }, hasGame ? "이 설정으로 새 항만 시작" : "2026년, 항만 운영 시작"), /* @__PURE__ */ React4.createElement("div", { className: "pt-welcome-links" }, hasGame && /* @__PURE__ */ React4.createElement("button", { "data-testid": "continue-game", onClick: onContinue }, "기존 캠페인으로 돌아가기"), /* @__PURE__ */ React4.createElement("button", { "data-testid": "import-log", onClick: onImport }, "저장 파일 불러오기")), /* @__PURE__ */ React4.createElement("small", { className: "pt-welcome-note" }, "2026–2040 · 연구 구조를 반영한 게임 · 수치와 사건은 게임 설정"));
+}
+function BuildPanel({ options, category, setCategory, fuel, setFuel, quote, onQuote, onOrder, dashboard, onProjects }) {
+  const filtered = options.filter((o) => o.category === category && (fuel === "all" || o.fuel === fuel));
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "pt-tabs", role: "tablist", "aria-label": "투자 범주" }, CATEGORIES.map((item) => /* @__PURE__ */ React4.createElement("button", { key: item.id, role: "tab", "aria-selected": category === item.id, onClick: () => {
+    setCategory(item.id);
+    setFuel("all");
+    onQuote(null);
+  } }, /* @__PURE__ */ React4.createElement(Glyph, { name: item.icon, size: 17 }), item.label))), /* @__PURE__ */ React4.createElement("div", { className: "pt-build-tools" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-filters", "aria-label": "사업 대상 연료" }, Object.entries(FUELS3).reverse().map(([id, label2]) => /* @__PURE__ */ React4.createElement("button", { key: id, "aria-pressed": fuel === id, onClick: () => {
+    setFuel(id);
+    onQuote(null);
+  } }, label2))), /* @__PURE__ */ React4.createElement("button", { className: "pt-text-link", onClick: onProjects }, "내 공사·시설 ", /* @__PURE__ */ React4.createElement(Glyph, { name: "arrow", size: 14 })), /* @__PURE__ */ React4.createElement("span", { className: "pt-actions-left" }, "올해 추가 추진 ", /* @__PURE__ */ React4.createElement("strong", null, dashboard.actionsRemaining, "건"))), /* @__PURE__ */ React4.createElement("div", { className: cx("pt-build-layout", quote && "has-quote") }, /* @__PURE__ */ React4.createElement("div", { className: "pt-project-options" }, filtered.map((option) => /* @__PURE__ */ React4.createElement("button", { className: cx("pt-project-option", quote?.id === option.id && "is-selected", !option.available && "is-locked"), key: option.id, "data-testid": "project-" + option.id, "aria-label": option.label + " 계획 검토", "aria-pressed": quote?.id === option.id, onClick: () => onQuote(option.id) }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement(FuelTag, { fuel: option.fuel }), /* @__PURE__ */ React4.createElement("span", { className: "pt-cost" }, money2(option.cost), /* @__PURE__ */ React4.createElement("small", null, "억"))), /* @__PURE__ */ React4.createElement("h3", null, option.label), /* @__PURE__ */ React4.createElement("p", null, option.description), /* @__PURE__ */ React4.createElement("div", { className: "pt-project-effect" }, option.effectLabel), /* @__PURE__ */ React4.createElement("footer", null, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(Glyph, { name: "clock", size: 13 }), option.readyYear, "년 가동"), /* @__PURE__ */ React4.createElement("span", null, "연 ", money2(option.annualCost), "억")), !option.available && /* @__PURE__ */ React4.createElement("small", { className: "pt-option-reason" }, option.reason)))), quote && /* @__PURE__ */ React4.createElement("aside", { className: "pt-quote", "data-testid": "selected-project" }, /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, "현장 사업 검토"), /* @__PURE__ */ React4.createElement("h3", null, quote.label), /* @__PURE__ */ React4.createElement("p", null, quote.effectLabel), /* @__PURE__ */ React4.createElement("dl", null, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("dt", null, "지금 집행"), /* @__PURE__ */ React4.createElement("dd", null, money2(quote.cost), "억")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("dt", null, "가동 예정"), /* @__PURE__ */ React4.createElement("dd", null, quote.readyYear, "년")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("dt", null, "가동 후 매년"), /* @__PURE__ */ React4.createElement("dd", null, money2(quote.annualCost), "억")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("dt", null, "착수 후 현금"), /* @__PURE__ */ React4.createElement("dd", { className: dashboard.budget < quote.cost ? "pt-negative" : "" }, money2(dashboard.budget - quote.cost), "억"))), /* @__PURE__ */ React4.createElement(Button, { primary: true, icon: "build", "data-testid": "project-order", onClick: () => onOrder(quote), disabled: !quote.available }, "이 사업 착수"), !quote.available && /* @__PURE__ */ React4.createElement("p", { className: "pt-inline-warning" }, quote.reason), /* @__PURE__ */ React4.createElement("small", null, "현금은 지금 사용하고, 효과는 가동 연도부터 발생합니다."))), !filtered.length && /* @__PURE__ */ React4.createElement("div", { className: "pt-empty" }, "이 조건의 사업이 없습니다. 다른 연료나 범주를 골라보세요."));
+}
+function ProjectsPanel({ dashboard, focusId, onExpand, onCancel, onBuild }) {
+  const active = dashboard.projects.filter((p) => p.status !== "cancelled");
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "pt-panel-intro" }, /* @__PURE__ */ React4.createElement("p", null, "공사 현장을 누르면 이곳에서 일정과 범위를 바꿀 수 있습니다."), /* @__PURE__ */ React4.createElement(Button, { icon: "build", onClick: onBuild }, "새 사업 찾기")), /* @__PURE__ */ React4.createElement("div", { className: "pt-pipeline" }, active.map((project) => /* @__PURE__ */ React4.createElement("article", { key: project.id, className: cx("pt-project-row", focusId === project.id && "is-focused") }, /* @__PURE__ */ React4.createElement("div", { className: "pt-phase-icon pt-phase-" + project.status }, /* @__PURE__ */ React4.createElement(Glyph, { name: project.status === "operating" ? "check" : "build", size: 25 })), /* @__PURE__ */ React4.createElement("div", { className: "pt-project-row-main" }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-status pt-status-" + project.status }, STATUS[project.status]), /* @__PURE__ */ React4.createElement(FuelTag, { fuel: project.fuel })), /* @__PURE__ */ React4.createElement("h3", null, project.label), /* @__PURE__ */ React4.createElement("p", null, project.orderedYear, "년 착수 ", /* @__PURE__ */ React4.createElement("span", null, "→"), " ", /* @__PURE__ */ React4.createElement("strong", null, project.readyYear, "년 가동"), " · 연 운영비 ", money2(project.annualCost), "억"), project.canExpand && /* @__PURE__ */ React4.createElement("small", null, "다연료 확대: 추가 ", money2(project.expandCost), "억 · 가동을 ", project.expandedReadyYear, "년으로 변경")), /* @__PURE__ */ React4.createElement("div", { className: "pt-project-row-actions" }, project.canExpand && /* @__PURE__ */ React4.createElement(Button, { "data-testid": "project-expand-" + project.id, onClick: () => onExpand(project) }, "다연료 확대"), project.canCancel && /* @__PURE__ */ React4.createElement(Button, { quiet: true, "data-testid": "project-cancel-" + project.id, onClick: () => onCancel(project) }, "취소 · ", money2(project.refund), "억 환급"))))), !active.length && /* @__PURE__ */ React4.createElement("div", { className: "pt-empty" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "build", size: 32 }), /* @__PURE__ */ React4.createElement("h3", null, "첫 공사 현장을 만들어보세요"), /* @__PURE__ */ React4.createElement("p", null, "현재의 기본 시설은 이미 운영 중입니다. 새로 착수한 사업은 지도와 이 목록에 나타납니다.")));
+}
+function OperationsPanel({ dashboard, preview, fuel, onPrice, onImprove }) {
+  const service = dashboard.service.filter((s) => !fuel || fuel === "all" || fuel === "common" || s.fuel === fuel);
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("section", { className: "pt-year-news", "data-testid": "annual-news", "aria-label": "올해 항만 소식" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-news-main" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "radar", size: 23 }), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, dashboard.year, "년 · 올해 항만 소식"), /* @__PURE__ */ React4.createElement("h3", null, dashboard.event.title), /* @__PURE__ */ React4.createElement("p", null, dashboard.event.description), /* @__PURE__ */ React4.createElement("div", { className: "pt-news-effects" }, dashboard.event.effects.map((effect, i) => /* @__PURE__ */ React4.createElement("span", { key: i }, effect))))), /* @__PURE__ */ React4.createElement("div", { className: "pt-news-market" }, /* @__PURE__ */ React4.createElement("span", null, "올해 잠재 급유 기회 ", /* @__PURE__ */ React4.createElement("small", null, "게임 시장 전체")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(FuelTag, { fuel: "methanol" }), /* @__PURE__ */ React4.createElement("strong", null, n3(dashboard.market.methanol, 0), /* @__PURE__ */ React4.createElement("small", null, "기회"))), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(FuelTag, { fuel: "ammonia" }), /* @__PURE__ */ React4.createElement("strong", null, n3(dashboard.market.ammonia, 0), /* @__PURE__ */ React4.createElement("small", null, "기회"))))), dashboard.warnings.length > 0 && /* @__PURE__ */ React4.createElement("ul", { className: "pt-news-warnings" }, dashboard.warnings.map((warning, i) => /* @__PURE__ */ React4.createElement("li", { key: i }, warning)))), /* @__PURE__ */ React4.createElement("div", { className: "pt-operations-grid" }, service.map((item) => /* @__PURE__ */ React4.createElement("article", { className: "pt-operation-card pt-operation-" + item.fuel, key: item.fuel }, /* @__PURE__ */ React4.createElement("div", { className: "pt-card-head" }, /* @__PURE__ */ React4.createElement(FuelTag, { fuel: item.fuel }), /* @__PURE__ */ React4.createElement("span", { className: item.ready ? "pt-good" : "pt-warning-text" }, item.ready ? "운영 준비됨" : "운영 준비 필요")), /* @__PURE__ */ React4.createElement("h3", null, item.simops ? "화물작업과 급유를 함께" : "작업창을 더 확보할까요?"), /* @__PURE__ */ React4.createElement("div", { className: "pt-service-numbers" }, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, n3(item.waitingHours)), /* @__PURE__ */ React4.createElement("small", null, "시간 예상 대기")), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, n3(item.capacity, 0)), /* @__PURE__ */ React4.createElement("small", null, "기회/년 처리 여력")), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, n3(item.feasibility, 0), "%"), /* @__PURE__ */ React4.createElement("small", null, "작업 가능성"))), /* @__PURE__ */ React4.createElement("p", null, "공급 준비도 ", n3(item.readiness, 0), "% · 유효가격 ", n3(item.effectivePrice), "지수"), /* @__PURE__ */ React4.createElement("div", { className: "pt-inline-actions" }, /* @__PURE__ */ React4.createElement(Button, { onClick: () => onImprove("operations", item.fuel), icon: "work" }, "작업 능력 갖추기"), /* @__PURE__ */ React4.createElement(Button, { quiet: true, onClick: () => onImprove("supply", item.fuel), icon: "build" }, "공급 여력 늘리기"))))), /* @__PURE__ */ React4.createElement("section", { className: "pt-price-card" }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, "올해 가격 정책"), /* @__PURE__ */ React4.createElement("h3", null, "고객 유치와 다음 투자의 균형"), /* @__PURE__ */ React4.createElement("p", null, "할인은 선택확률을 높이지만 기회당 기여수입을 줄입니다. 공급 상한에 닿았다면 실제 수행량이 더 늘지 않을 수 있습니다.")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("div", { className: "pt-price-buttons" }, [0, 0.1, 0.2, 0.3].map((value) => /* @__PURE__ */ React4.createElement("button", { key: value, "aria-pressed": dashboard.discount === value, "data-testid": "price-" + Math.round(value * 100), onClick: () => onPrice(value) }, value ? Math.round(value * 100) + "%" : "정가"))), /* @__PURE__ */ React4.createElement("div", { className: "pt-price-preview" }, /* @__PURE__ */ React4.createElement("span", null, "수행 전망 ", /* @__PURE__ */ React4.createElement("strong", null, n3(preview.served), "기회")), /* @__PURE__ */ React4.createElement("span", null, "결산 현금 ", /* @__PURE__ */ React4.createElement("strong", { className: preview.finance.closingCash < 0 ? "pt-negative" : "" }, money2(preview.finance.closingCash), "억"))))), /* @__PURE__ */ React4.createElement("div", { className: "pt-mini-issues" }, preview.bottlenecks.slice(0, 3).map((item) => /* @__PURE__ */ React4.createElement("article", { key: item.id }, /* @__PURE__ */ React4.createElement(Glyph, { name: "alert", size: 18 }), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("strong", null, item.label), /* @__PURE__ */ React4.createElement("p", null, item.description))))));
+}
+function ContractsPanel({ offers, contracts, onAccept, onLater, focusId }) {
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("p", { className: "pt-panel-copy" }, "선사의 약속을 잡을까요? 준비 기한과 실제 가동 상태를 함께 확인하세요."), /* @__PURE__ */ React4.createElement("div", { className: "pt-request-grid" }, offers.map((offer, index) => /* @__PURE__ */ React4.createElement("article", { className: cx("pt-request-card", focusId === offer.id && "pt-quest-focus"), key: offer.id }, /* @__PURE__ */ React4.createElement("header", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-person-avatar" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "mail", size: 25 })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, "선사 공급 담당 · 게임 속 요청"), /* @__PURE__ */ React4.createElement("h3", null, offer.label)), /* @__PURE__ */ React4.createElement(FuelTag, { fuel: offer.fuel })), /* @__PURE__ */ React4.createElement("blockquote", null, "“", offer.deadlineYear, "년까지 준비된다면, 매년 ", n3(offer.volume, 0), "회의 급유를 맡기고 싶습니다.”"), /* @__PURE__ */ React4.createElement("div", { className: "pt-request-terms" }, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("small", null, "약정 기간"), /* @__PURE__ */ React4.createElement("strong", null, offer.startYear, "–", offer.endYear)), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("small", null, "이행 추가수입"), /* @__PURE__ */ React4.createElement("strong", null, n3(offer.premium, 2), "억/기회")), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("small", null, "미이행 비용"), /* @__PURE__ */ React4.createElement("strong", null, n3(offer.penalty, 2), "억/기회"))), /* @__PURE__ */ React4.createElement("details", null, /* @__PURE__ */ React4.createElement("summary", null, "가동 조건과 미이행 규칙"), /* @__PURE__ */ React4.createElement("ul", null, offer.requirements.map((r, i) => /* @__PURE__ */ React4.createElement("li", { key: i }, r)))), /* @__PURE__ */ React4.createElement("footer", null, /* @__PURE__ */ React4.createElement(Button, { quiet: true, onClick: onLater }, "다음에 검토"), /* @__PURE__ */ React4.createElement(Button, { primary: true, icon: "check", "data-testid": "contract-" + offer.id, onClick: () => onAccept(offer), disabled: !offer.available }, "약정 수락"))))), contracts.length > 0 && /* @__PURE__ */ React4.createElement("section", { className: "pt-current-contracts" }, /* @__PURE__ */ React4.createElement("h3", null, "이미 맡은 약속"), contracts.map((contract) => /* @__PURE__ */ React4.createElement("article", { className: focusId === contract.id ? "pt-quest-focus" : "", key: contract.id }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement(FuelTag, { fuel: contract.fuel }), /* @__PURE__ */ React4.createElement("span", { className: "pt-status pt-status-" + contract.status }, STATUS[contract.status])), /* @__PURE__ */ React4.createElement("h4", null, contract.label), /* @__PURE__ */ React4.createElement("p", null, contract.startYear, "–", contract.endYear, "년 · 연 ", n3(contract.volume, 0), "기회"), /* @__PURE__ */ React4.createElement("div", { className: "pt-contract-track" }, /* @__PURE__ */ React4.createElement("span", { style: { width: (contract.required ? Math.min(100, contract.served / contract.required * 100) : 0) + "%" } })), /* @__PURE__ */ React4.createElement("div", { className: "pt-contract-facts" }, /* @__PURE__ */ React4.createElement("span", null, contract.required ? n3(contract.served) + " / " + n3(contract.required) + "기회 이행" : "개시 전 준비 기간"), /* @__PURE__ */ React4.createElement("span", { className: contract.penalties ? "pt-negative" : "" }, "미이행 비용 ", money2(contract.penalties), "억")), /* @__PURE__ */ React4.createElement("details", null, /* @__PURE__ */ React4.createElement("summary", null, "조건 다시 보기"), /* @__PURE__ */ React4.createElement("ul", null, contract.requirements.map((r, i) => /* @__PURE__ */ React4.createElement("li", { key: i }, r))))))), !offers.length && !contracts.length && /* @__PURE__ */ React4.createElement("div", { className: "pt-empty" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "mail", size: 34 }), /* @__PURE__ */ React4.createElement("h3", null, "현재 새 요청이 없습니다"), /* @__PURE__ */ React4.createElement("p", null, "연료 수요가 바뀌면서 다른 공급 약정이 제안됩니다.")));
+}
+function WorldPanel({ dashboard, selectedId, onSelect, onReturn }) {
+  const selected = dashboard.competition.find((p) => p.id === selectedId) || dashboard.competition[1];
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "pt-rival-tabs" }, dashboard.competition.map((port) => /* @__PURE__ */ React4.createElement("button", { key: port.id, className: port.id === selected.id ? "is-selected" : "", onClick: () => onSelect(port.id) }, port.flag, " ", port.name))), /* @__PURE__ */ React4.createElement("div", { className: "pt-rival-detail" }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, selected.id === "korea" ? "우리 항만" : "같은 시장을 두고 경쟁합니다"), /* @__PURE__ */ React4.createElement("h3", null, selected.flag, " ", selected.name), /* @__PURE__ */ React4.createElement("p", null, selected.profile), /* @__PURE__ */ React4.createElement("div", { className: "pt-service-numbers" }, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, n3(selected.capture), "%"), /* @__PURE__ */ React4.createElement("small", null, "잠재시장 포획률")), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, n3(selected.served, 0)), /* @__PURE__ */ React4.createElement("small", null, "연간 수행 전망")), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, n3(selected.capacity, 0)), /* @__PURE__ */ React4.createElement("small", null, "처리 여력")))), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("h4", null, "준비하고 있는 사업"), selected.upcoming.length ? /* @__PURE__ */ React4.createElement("ul", null, selected.upcoming.map((text, i) => /* @__PURE__ */ React4.createElement("li", { key: i }, text))) : /* @__PURE__ */ React4.createElement("p", null, "현재 진행 중인 신규 사업이 없습니다."), /* @__PURE__ */ React4.createElement(Button, { icon: "anchor", onClick: onReturn }, "우리 항만으로 돌아가기"))), /* @__PURE__ */ React4.createElement("p", { className: "pt-fineprint" }, "연결선은 비교 대상의 관계를 보여주는 게임 도식입니다. 실제 항로·선박 운항 기록을 뜻하지 않습니다."));
+}
+function LedgerPanel({ dashboard, preview, onReport }) {
+  const finance = preview?.finance || dashboard.lastResult?.finance;
+  return /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "pt-ledger-top" }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, "기간 누적 포획률"), /* @__PURE__ */ React4.createElement("strong", null, percent(dashboard.score.cumulativeCapture)), /* @__PURE__ */ React4.createElement("small", null, "누적 수행 ", n3(dashboard.score.cumulativeServed), " / 잠재수요 ", n3(dashboard.score.cumulativeDemand), "기회")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, "가용 현금"), /* @__PURE__ */ React4.createElement("strong", null, money2(dashboard.budget), /* @__PURE__ */ React4.createElement("small", null, "억")), /* @__PURE__ */ React4.createElement("small", null, "누적 투자 ", money2(dashboard.score.totalInvestment), "억")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, "계약 이행"), /* @__PURE__ */ React4.createElement("strong", null, dashboard.contracts.some((c) => c.required > 0) ? percent(dashboard.score.contractFulfilment) : "—"), /* @__PURE__ */ React4.createElement("small", null, "이행기한이 도래한 물량 기준"))), /* @__PURE__ */ React4.createElement("div", { className: "pt-ledger-grid" }, /* @__PURE__ */ React4.createElement("section", null, /* @__PURE__ */ React4.createElement("h3", null, dashboard.phase === "playing" ? dashboard.year + "년 결산 전망" : "마지막 결산"), finance && /* @__PURE__ */ React4.createElement("div", { className: "gp-app pt-legacy" }, /* @__PURE__ */ React4.createElement(FinanceTable, { finance }))), /* @__PURE__ */ React4.createElement("section", null, /* @__PURE__ */ React4.createElement("div", { className: "pt-card-head" }, /* @__PURE__ */ React4.createElement("h3", null, "매년 쌓인 성과"), dashboard.lastResult && /* @__PURE__ */ React4.createElement(Button, { quiet: true, onClick: onReport }, "지난 결산 상세")), /* @__PURE__ */ React4.createElement("div", { className: "gp-app pt-legacy" }, /* @__PURE__ */ React4.createElement(HistoryChart, { history: dashboard.history })), /* @__PURE__ */ React4.createElement("p", { className: "pt-fineprint" }, "누적 포획률은 연도별 비율의 단순 평균이 아닌, 전체 기간의 잠재수요로 가중한 성과입니다."))), dashboard.market.forecast.length > 0 && /* @__PURE__ */ React4.createElement("section", { className: "pt-forecast" }, /* @__PURE__ */ React4.createElement("h3", null, "앞으로의 연료 수요 ", /* @__PURE__ */ React4.createElement("small", null, "게임 시나리오")), /* @__PURE__ */ React4.createElement("div", null, dashboard.market.forecast.map((item) => /* @__PURE__ */ React4.createElement("article", { key: item.year }, /* @__PURE__ */ React4.createElement("strong", null, item.year, "년"), /* @__PURE__ */ React4.createElement("span", null, "메탄올 ", /* @__PURE__ */ React4.createElement("b", null, n3(item.methanol, 0))), /* @__PURE__ */ React4.createElement("span", null, "암모니아 ", /* @__PURE__ */ React4.createElement("b", null, n3(item.ammonia, 0))), /* @__PURE__ */ React4.createElement("div", { className: "pt-fuel-bar" }, /* @__PURE__ */ React4.createElement("i", { style: { width: item.methanol / item.total * 100 + "%" } }), /* @__PURE__ */ React4.createElement("i", { style: { width: item.ammonia / item.total * 100 + "%" } })))))));
+}
+var QUEST_STATUS = { active: "도전 중", waiting: "가동 기다리는 중", complete: "달성", locked: "다음 목표", missed: "기회 종료" };
+function HarborGuide({ celebrating = false }) {
+  return /* @__PURE__ */ React4.createElement("svg", { width: "42", height: "47", viewBox: "0 0 42 47", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ React4.createElement("ellipse", { cx: "21", cy: "44", rx: "17", ry: "3", fill: "#417c7130" }), /* @__PURE__ */ React4.createElement("path", { d: "M6 44c0-11 5-17 15-17s15 6 15 17", fill: "#3ba598" }), /* @__PURE__ */ React4.createElement("path", { d: "M15 30l6 6 6-6", fill: "#f4f2d2" }), /* @__PURE__ */ React4.createElement("path", { d: "M21 36v8", stroke: "#247b76", strokeWidth: "2" }), /* @__PURE__ */ React4.createElement("ellipse", { cx: "21", cy: "20", rx: "11", ry: "13", fill: "#f3c39a" }), /* @__PURE__ */ React4.createElement("path", { d: "M8 17c-1-14 27-14 26 0", fill: "#f9cb54" }), /* @__PURE__ */ React4.createElement("path", { d: "M20 4v10M7 15h28", stroke: "#ffec9f", strokeWidth: "3.5", strokeLinecap: "round" }), celebrating ? /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("path", { d: "m14 20 2-2 2 2m6 0 2-2 2 2", stroke: "#365863", strokeWidth: "1.5", strokeLinecap: "round" }), /* @__PURE__ */ React4.createElement("path", { d: "M17 25q4 7 8 0", fill: "#bb6755" })) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "17", cy: "21", r: "1.3", fill: "#365863" }), /* @__PURE__ */ React4.createElement("circle", { cx: "25", cy: "21", r: "1.3", fill: "#365863" }), /* @__PURE__ */ React4.createElement("path", { d: "M18 26q3 3 6 0", stroke: "#b06a50", strokeWidth: "1.5", strokeLinecap: "round" })), /* @__PURE__ */ React4.createElement("circle", { cx: "13", cy: "24", r: "2.2", fill: "#ec9c83", opacity: ".6" }), /* @__PURE__ */ React4.createElement("circle", { cx: "29", cy: "24", r: "2.2", fill: "#ec9c83", opacity: ".6" }));
+}
+function MoodFace({ id, size = 28 }) {
+  const sad = id === "struggling" || id === "closed";
+  const quiet = id === "quiet";
+  return /* @__PURE__ */ React4.createElement("svg", { width: size, height: size, viewBox: "0 0 32 32", "aria-hidden": "true" }, /* @__PURE__ */ React4.createElement("circle", { cx: "16", cy: "16", r: "14", fill: sad ? "#d9b99b" : quiet ? "#e6cf95" : "#fce6a1", stroke: sad ? "#b18e7a" : "#e5bc68", strokeWidth: "1.6" }), /* @__PURE__ */ React4.createElement("path", { d: "M6 10q10-10 20 0", stroke: "#fff9d6", strokeWidth: "2", opacity: ".7", fill: "none" }), id === "thriving" ? /* @__PURE__ */ React4.createElement("path", { d: "m8 14 3-2 3 2m4 0 3-2 3 2", stroke: "#6b7263", strokeWidth: "1.8", fill: "none", strokeLinecap: "round" }) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("circle", { cx: "11", cy: "14", r: "1.5", fill: "#6b7263" }), /* @__PURE__ */ React4.createElement("circle", { cx: "21", cy: "14", r: "1.5", fill: "#6b7263" })), /* @__PURE__ */ React4.createElement("path", { d: sad ? "M11 23q5-5 10 0" : quiet ? "M12 22h8" : "M10 20q6 8 12 0", stroke: "#a87962", strokeWidth: "1.7", fill: "none", strokeLinecap: "round" }), /* @__PURE__ */ React4.createElement("ellipse", { cx: "7.5", cy: "19", rx: "2.5", ry: "1.5", fill: "#efb097" }), /* @__PURE__ */ React4.createElement("ellipse", { cx: "24.5", cy: "19", rx: "2.5", ry: "1.5", fill: "#efb097" }));
+}
+function QuestProgress({ quest, compact = false }) {
+  const progress = Math.min(100, Math.max(0, Number(quest.progress) || 0));
+  return /* @__PURE__ */ React4.createElement("div", { className: cx("pt-quest-progress", compact && "is-compact") }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, quest.progressLabel), /* @__PURE__ */ React4.createElement("strong", null, Math.round(progress), "%")), /* @__PURE__ */ React4.createElement("div", { role: "progressbar", "aria-label": quest.title + " 달성 진행도", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": Math.round(progress) }, /* @__PURE__ */ React4.createElement("i", { style: { width: progress + "%" } })));
+}
+var COMPACT_QUEST_QUERY = "(max-width: 560px), (max-height: 560px)";
+function useCompactQuest() {
+  const [compact, setCompact] = useState3(() => {
+    try {
+      return typeof window !== "undefined" && window.matchMedia(COMPACT_QUEST_QUERY).matches;
+    } catch {
+      return false;
+    }
+  });
+  useEffect3(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(COMPACT_QUEST_QUERY);
+    const update = () => setCompact(query.matches);
+    update();
+    if (query.addEventListener) query.addEventListener("change", update);
+    else query.addListener?.(update);
+    return () => {
+      if (query.removeEventListener) query.removeEventListener("change", update);
+      else query.removeListener?.(update);
+    };
+  }, []);
+  return compact;
+}
+function QuestCard({ board, onAction, onBoard }) {
+  const compact = useCompactQuest();
+  const [expanded, setExpanded] = useState3(false);
+  const detailsId = "quest-details-" + useId3().replace(/:/g, "");
+  const quest = board.active;
+  if (!quest) return null;
+  const steps = quest.steps || [];
+  const showDetails = !compact || expanded;
+  const nextStep = steps.find((step) => !step.complete);
+  const nextText = nextStep?.note && /\d{4}년/.test(nextStep.note) ? nextStep.note : nextStep?.label;
+  return /* @__PURE__ */ React4.createElement("aside", { className: cx("pt-quest-card", "pt-quest-" + quest.status, compact && "pt-quest-compact", showDetails && "pt-quest-expanded"), "data-testid": "active-quest", "data-quest-id": quest.id, "data-compact": compact, "data-expanded": showDetails, "aria-label": "지금의 항만 퀘스트" }, /* @__PURE__ */ React4.createElement("header", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-quest-guide" }, /* @__PURE__ */ React4.createElement(HarborGuide, null)), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("small", null, board.chapter?.label || "항만 성장 이야기"), /* @__PURE__ */ React4.createElement("strong", null, "지금 도전할 퀘스트")), compact && /* @__PURE__ */ React4.createElement("button", { className: "pt-quest-details-toggle", "data-testid": "quest-details-toggle", "aria-expanded": showDetails, "aria-controls": detailsId, onClick: () => setExpanded((value) => !value) }, /* @__PURE__ */ React4.createElement(Glyph, { name: "chevron", size: 14 }), /* @__PURE__ */ React4.createElement("span", null, showDetails ? "접기" : "자세히")), /* @__PURE__ */ React4.createElement("button", { "data-testid": "open-quests", onClick: onBoard, "aria-label": "모든 퀘스트와 성장 배지 보기" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "book", size: 18 }), /* @__PURE__ */ React4.createElement("span", null, "목표 수첩"))), /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-card-heading" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-heading" }, /* @__PURE__ */ React4.createElement("span", null, QUEST_STATUS[quest.status]), quest.deadlineYear && /* @__PURE__ */ React4.createElement("b", null, /* @__PURE__ */ React4.createElement(Glyph, { name: "clock", size: 12 }), quest.deadlineYear, "년까지 가동")), /* @__PURE__ */ React4.createElement("h2", null, quest.title), compact && !showDetails && nextText && /* @__PURE__ */ React4.createElement("p", { className: "pt-quest-next-step", "data-testid": "quest-next-step", title: nextText }, nextText)), /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-card-body", id: detailsId, "data-testid": "quest-details", hidden: !showDetails }, /* @__PURE__ */ React4.createElement("p", { className: "pt-quest-description" }, quest.description), /* @__PURE__ */ React4.createElement("ul", { className: "pt-quest-checklist" }, steps.map((step) => /* @__PURE__ */ React4.createElement("li", { key: step.id, className: step.complete ? "is-done" : "" }, /* @__PURE__ */ React4.createElement("span", null, step.complete ? /* @__PURE__ */ React4.createElement(Glyph, { name: "check", size: 11 }) : ""), /* @__PURE__ */ React4.createElement("div", null, step.label, step.note && /* @__PURE__ */ React4.createElement("small", null, step.note)))))), /* @__PURE__ */ React4.createElement(QuestProgress, { quest, compact: true }), /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-card-actions" }, quest.action && /* @__PURE__ */ React4.createElement(Button, { primary: true, icon: quest.action.type === "advance" ? "play" : "arrow", "data-testid": "quest-action", onClick: () => onAction(quest.action, quest) }, quest.action.label), quest.secondaryAction && showDetails && /* @__PURE__ */ React4.createElement("button", { className: "pt-quest-secondary", onClick: () => onAction(quest.secondaryAction, quest) }, quest.secondaryAction.label, /* @__PURE__ */ React4.createElement(Glyph, { name: "chevron", size: 13 }))));
+}
+function NotificationRail({ notice, celebration, activeQuest, onDismissNotice, onDismissCelebration, inline = false }) {
+  if (!notice && !celebration) return null;
+  return /* @__PURE__ */ React4.createElement("div", { className: cx("pt-notification-rail", inline && "is-inline"), "data-testid": "notification-rail", "aria-label": "항만 알림" }, celebration && /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-celebration", role: "status", "data-testid": "quest-completion" }, /* @__PURE__ */ React4.createElement("span", { className: "pt-celebration-medal" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "flag", size: 27 })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("small", null, "퀘스트 달성 · 성장 배지 획득"), /* @__PURE__ */ React4.createElement("strong", null, celebration.quests[0].title, celebration.quests.length > 1 ? " 외 " + (celebration.quests.length - 1) + "개" : ""), /* @__PURE__ */ React4.createElement("p", null, activeQuest ? "다음 목표: " + activeQuest.title : "성장 수첩에서 항만의 기록을 확인하세요.")), /* @__PURE__ */ React4.createElement("button", { "aria-label": "퀘스트 달성 알림 닫기", onClick: onDismissCelebration }, /* @__PURE__ */ React4.createElement(Glyph, { name: "close", size: 15 }))), notice && /* @__PURE__ */ React4.createElement("div", { className: "pt-toast pt-toast-" + notice.type, role: notice.type === "error" ? "alert" : "status" }, /* @__PURE__ */ React4.createElement(Glyph, { name: notice.type === "error" ? "alert" : "check", size: 19 }), /* @__PURE__ */ React4.createElement("span", null, notice.text), /* @__PURE__ */ React4.createElement("button", { "aria-label": "알림 닫기", onClick: onDismissNotice }, /* @__PURE__ */ React4.createElement(Glyph, { name: "close", size: 15 }))));
+}
+function HarborLifePanel({ life, onLedger }) {
+  return /* @__PURE__ */ React4.createElement("section", { className: "pt-life-detail pt-life-" + life.id, "aria-label": "항만 분위기의 근거" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-life-detail-heading" }, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(MoodFace, { id: life.id, size: 50 })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("small", null, "지금 보이는 항만의 활기"), /* @__PURE__ */ React4.createElement("h3", null, life.label), /* @__PURE__ */ React4.createElement("p", null, life.caption))), /* @__PURE__ */ React4.createElement("p", { className: "pt-life-reason" }, life.reason), /* @__PURE__ */ React4.createElement("div", { className: "pt-life-drivers" }, (life.drivers || []).map((driver, i) => /* @__PURE__ */ React4.createElement("article", { key: i }, /* @__PURE__ */ React4.createElement("small", null, driver.label), /* @__PURE__ */ React4.createElement("strong", null, driver.value), /* @__PURE__ */ React4.createElement("p", null, driver.text)))), /* @__PURE__ */ React4.createElement("div", { className: "pt-life-foot" }, /* @__PURE__ */ React4.createElement("p", null, "최근 결산의 운영 수지와 급유 실적에 따라 거리와 부두의 모습이 달라집니다."), /* @__PURE__ */ React4.createElement("button", { onClick: onLedger }, "장부에서 확인", /* @__PURE__ */ React4.createElement(Glyph, { name: "arrow", size: 14 }))));
+}
+function QuestBoard({ board, life, harbor, onAction, onLedger }) {
+  return /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-board", "data-testid": "quest-board" }, /* @__PURE__ */ React4.createElement(HarborLifePanel, { life, onLedger }), /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-board-heading" }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, "HARBOR QUEST JOURNAL"), /* @__PURE__ */ React4.createElement("h3", null, "한 단계씩, 나의 항만 만들기"), /* @__PURE__ */ React4.createElement("p", null, board.summary || "항만의 현재 상태에 맞춘 추천 목표입니다. 다른 사업도 자유롭게 준비할 수 있어요.")), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("strong", null, board.completedCount), " / ", board.totalCount, /* @__PURE__ */ React4.createElement("small", null, "기본 성장 목표 달성"))), board.completedIds.length > 0 && /* @__PURE__ */ React4.createElement("div", { className: "pt-earned-badges", "aria-label": "달성한 성장 배지" }, board.quests.filter((quest) => board.completedIds.includes(quest.id)).map((quest) => /* @__PURE__ */ React4.createElement("span", { key: quest.id }, /* @__PURE__ */ React4.createElement(Glyph, { name: "flag", size: 13 }), quest.rewardLabel || quest.title))), /* @__PURE__ */ React4.createElement("div", { className: "pt-quest-board-list" }, board.quests.map((quest, index) => /* @__PURE__ */ React4.createElement("article", { key: quest.id, className: cx("pt-journal-quest", "is-" + quest.status, board.active?.id === quest.id && "is-current"), "data-testid": "quest-row-" + quest.id, "data-quest-id": quest.id, "data-quest-status": quest.status }, /* @__PURE__ */ React4.createElement("header", null, /* @__PURE__ */ React4.createElement("span", { className: "pt-quest-seal" }, quest.status === "complete" ? /* @__PURE__ */ React4.createElement(Glyph, { name: "check", size: 19 }) : String(index + 1).padStart(2, "0")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("small", null, board.active?.id === quest.id ? "지금 추천하는 목표" : QUEST_STATUS[quest.status]), /* @__PURE__ */ React4.createElement("h3", null, quest.title)), quest.deadlineYear && /* @__PURE__ */ React4.createElement("span", { className: "pt-quest-deadline" }, quest.deadlineYear, "년 가동")), /* @__PURE__ */ React4.createElement("p", null, quest.description), /* @__PURE__ */ React4.createElement("ul", { className: "pt-journal-steps" }, quest.steps.map((step) => /* @__PURE__ */ React4.createElement("li", { key: step.id, className: step.complete ? "is-done" : "" }, /* @__PURE__ */ React4.createElement("span", null, step.complete ? /* @__PURE__ */ React4.createElement(Glyph, { name: "check", size: 11 }) : ""), /* @__PURE__ */ React4.createElement("div", null, step.label, step.note && /* @__PURE__ */ React4.createElement("small", null, step.note))))), /* @__PURE__ */ React4.createElement(QuestProgress, { quest }), quest.why && /* @__PURE__ */ React4.createElement("details", null, /* @__PURE__ */ React4.createElement("summary", null, "이 목표가 도움이 되는 이유"), /* @__PURE__ */ React4.createElement("p", null, quest.why)), /* @__PURE__ */ React4.createElement("footer", null, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(Glyph, { name: "flag", size: 13 }), quest.rewardLabel || "성장 기록"), quest.action && quest.status !== "complete" && /* @__PURE__ */ React4.createElement(Button, { primary: board.active?.id === quest.id, icon: quest.action.type === "advance" ? "play" : "arrow", "data-testid": "quest-board-action-" + quest.id, onClick: () => onAction(quest.action, quest) }, quest.action.label))))), /* @__PURE__ */ React4.createElement("div", { className: "pt-journal-note" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "anchor", size: 21 }), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("strong", null, harbor.stage.label), /* @__PURE__ */ React4.createElement("p", null, harbor.stage.description), /* @__PURE__ */ React4.createElement("small", null, "성장 배지는 가동과 실제 실적의 기록입니다. 자금은 운영·계약 결산으로 얻습니다."))));
+}
+function CompactReport({ result, dashboard, nextCompletions, onClose, onDetails }) {
+  const panel = useRef3(null);
+  const closeRef = useRef3(onClose);
+  closeRef.current = onClose;
+  useEffect3(() => {
+    const previous = document.activeElement;
+    panel.current?.querySelector('[data-testid="close-report"]')?.focus();
+    const key = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = [...panel.current?.querySelectorAll('button:not(:disabled), a[href], input, select, [tabindex="0"]') || []];
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !panel.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !panel.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("keydown", key);
+      if (previous?.isConnected) previous.focus?.();
+    };
+  }, []);
+  const bankrupt = dashboard.phase === "bankrupt";
+  const complete = dashboard.phase === "complete";
+  return /* @__PURE__ */ React4.createElement("section", { ref: panel, className: cx("pt-result-card", bankrupt && "is-bankrupt"), role: "dialog", "aria-modal": "true", "aria-label": result.year + "년 운영 결과" }, /* @__PURE__ */ React4.createElement("span", { className: "pt-result-badge" }, /* @__PURE__ */ React4.createElement(Glyph, { name: bankrupt ? "alert" : "anchor", size: 31 })), /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, bankrupt ? "운영 종료 · 자금 부족" : complete ? "2040년 최종 결산" : "ANNUAL HARBOR REPORT"), /* @__PURE__ */ React4.createElement("h2", null, bankrupt ? "다음 운영을 이어갈 자금이 부족합니다" : complete ? "당신이 만든 항만의 15년" : result.year + "년의 항만 운영을 마쳤습니다"), /* @__PURE__ */ React4.createElement("div", { className: "pt-result-stats" }, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, "실제 급유 수행"), /* @__PURE__ */ React4.createElement("strong", null, n3(result.served), /* @__PURE__ */ React4.createElement("small", null, "기회")), /* @__PURE__ */ React4.createElement("em", null, signed3(result.served - result.bridge.start), "기회 변화")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("span", null, "기간 누적 포획률"), /* @__PURE__ */ React4.createElement("strong", null, n3(dashboard.score.cumulativeCapture), /* @__PURE__ */ React4.createElement("small", null, "%")), /* @__PURE__ */ React4.createElement("em", null, bankrupt ? "미완주 기간의 기록" : dashboard.history.length + "년의 기회를 누적")), /* @__PURE__ */ React4.createElement("div", { className: "pt-result-cash" }, /* @__PURE__ */ React4.createElement("span", null, "기말 현금"), /* @__PURE__ */ React4.createElement("strong", { "data-testid": "closing-cash", className: result.finance.closingCash < 0 ? "pt-negative" : "" }, money2(result.finance.closingCash), /* @__PURE__ */ React4.createElement("small", null, "억")), /* @__PURE__ */ React4.createElement("em", null, "올해 운영비 ", money2(result.finance.operatingCost), "억"))), !!nextCompletions.length && /* @__PURE__ */ React4.createElement("div", { className: "pt-completion-banner" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "check", size: 22 }), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("strong", null, dashboard.year, "년, 새 시설이 가동됩니다"), /* @__PURE__ */ React4.createElement("p", null, nextCompletions.join(" · ")))), /* @__PURE__ */ React4.createElement("p", { className: "pt-result-takeaway" }, bankrupt ? "투자비·반복 운영비·약정 부담을 장부에서 함께 확인해보세요." : result.bottlenecks[0]?.description), /* @__PURE__ */ React4.createElement("footer", null, /* @__PURE__ */ React4.createElement(Button, { quiet: true, onClick: onDetails, icon: "book" }, "상세 결산 보기"), /* @__PURE__ */ React4.createElement(Button, { primary: true, "data-testid": "close-report", onClick: onClose, icon: "arrow" }, complete || bankrupt ? "항만 기록으로" : dashboard.year + "년 현장으로")));
+}
+function GreenPortStrategy() {
+  const [game, setGame] = useState3(readSaved);
+  const [setup, setSetup] = useState3(() => !game);
+  const [settings, setSettings] = useState3(DEFAULTS);
+  const [view, setView] = useState3("harbor");
+  const [preferences, setPreferences] = useState3(readView);
+  const [sheet, setSheet] = useState3(null);
+  const [selection, setSelection] = useState3(null);
+  const [category, setCategory] = useState3("coordination");
+  const [fuel, setFuel] = useState3("all");
+  const [quoteId, setQuoteId] = useState3(null);
+  const [operation, setOperation] = useState3(null);
+  const [speed, setSpeed] = useState3(1);
+  const [report, setReport] = useState3(null);
+  const [fullReport, setFullReport] = useState3(false);
+  const [evidence, setEvidence] = useState3(false);
+  const [notice, setNotice] = useState3(null);
+  const [saveStatus, setSaveStatus] = useState3("");
+  const [showHint, setShowHint] = useState3(true);
+  const [questCelebration, setQuestCelebration] = useState3(null);
+  const completedQuestsRef = useRef3(null);
+  const gameRef = useRef3(game);
+  const opRef = useRef3(null);
+  const fileRef = useRef3(null);
+  const importRequestRef = useRef3(0);
+  const noticeTimer = useRef3(null);
+  const reducedRef = useRef3(reducedMotion());
+  gameRef.current = game;
+  const attract = useMemo3(() => createGame(DEFAULTS), []);
+  const sceneState = game || attract;
+  const dashboard = useMemo3(() => getDashboard(sceneState), [sceneState]);
+  const preview = useMemo3(() => sceneState.phase === "playing" ? previewYear(sceneState) : sceneState.lastResult, [sceneState]);
+  const harbor = useMemo3(() => deriveHarbor(sceneState), [sceneState]);
+  const life = useMemo3(() => deriveHarborLife(sceneState), [sceneState]);
+  const quests = useMemo3(() => deriveQuestBoard(sceneState), [sceneState]);
+  const options = useMemo3(() => game?.phase === "playing" ? getProjectOptions(game) : [], [game]);
+  const offers = useMemo3(() => game?.phase === "playing" ? getContractOffers(game) : [], [game]);
+  const quote = options.find((o) => o.id === quoteId) || null;
+  const playing = game?.phase === "playing";
+  const issue = harbor.alerts[0] || null;
+  const activeQuest = quests.active;
+  const activeProjects2 = dashboard.projects.filter((p) => p.status !== "cancelled" && p.status !== "operating");
+  const selectedRival = selection?.kind === "rival" ? selection.id : "singapore";
+  useEffect3(() => {
+    if (!game) return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, exportGame(game));
+      setSaveStatus("진행이 자동 저장되었습니다");
+    } catch {
+      setSaveStatus("자동 저장 불가 · 기록을 파일로 저장하세요");
+    }
+  }, [game]);
+  useEffect3(() => {
+    try {
+      window.localStorage.setItem(VIEW_KEY, JSON.stringify(preferences));
+    } catch {
+    }
+  }, [preferences]);
+  useEffect3(() => () => clearTimeout(noticeTimer.current), []);
+  useEffect3(() => {
+    if (!operation || operation.paused) return;
+    const timer = setInterval(() => {
+      const token = opRef.current;
+      if (!token || token.paused || token.settled) return;
+      token.progress = Math.min(1, token.progress + 100 / 12e3 * speed);
+      if (token.progress >= 1) finishOperation(token);
+      else setOperation({ ...token });
+    }, 100);
+    return () => clearInterval(timer);
+  }, [!!operation, operation?.paused, speed]);
+  useEffect3(() => {
+    if (!game || setup) return;
+    const current = new Set(quests.completedIds);
+    const previous = completedQuestsRef.current;
+    if (previous) {
+      const earned = quests.quests.filter((quest) => current.has(quest.id) && !previous.has(quest.id));
+      if (earned.length) setQuestCelebration({ quests: earned, year: game.year });
+    }
+    completedQuestsRef.current = current;
+  }, [game, quests, setup]);
+  useEffect3(() => {
+    if (!questCelebration || setup || sheet || operation || report || evidence) return;
+    const timer = setTimeout(() => setQuestCelebration(null), 9e3);
+    return () => clearTimeout(timer);
+  }, [questCelebration, setup, sheet, !!operation, report, evidence]);
+  useEffect3(() => {
+    clearTimeout(noticeTimer.current);
+    if (!notice || operation || report || evidence) return;
+    noticeTimer.current = setTimeout(() => setNotice(null), notice.type === "error" ? 8500 : 5e3);
+    return () => clearTimeout(noticeTimer.current);
+  }, [notice, !!operation, report, evidence]);
+  const notify = (text, type = "success") => {
+    setNotice({ text, type });
+  };
+  function commitState(next) {
+    gameRef.current = next;
+    setGame(next);
+  }
+  function mutate(action, success, after) {
+    if (!gameRef.current || opRef.current || gameRef.current.phase !== "playing") return;
+    try {
+      const result = action(gameRef.current);
+      if (!result.ok) {
+        notify(result.error, "error");
+        return;
+      }
+      commitState(result.state);
+      if (success) notify(success);
+      after?.(result.state);
+    } catch (error) {
+      notify("선택을 반영하지 못했습니다: " + error.message, "error");
+    }
+  }
+  function startCampaign() {
+    if (opRef.current) return;
+    const seed = Number(settings.seed);
+    if (!Number.isSafeInteger(seed) || seed < 1 || seed > 2147483647) {
+      notify("시드는 1~2,147,483,647 사이 정수로 입력하세요.", "error");
+      return;
+    }
+    importRequestRef.current++;
+    completedQuestsRef.current = null;
+    setQuestCelebration(null);
+    commitState(createGame({ ...settings, seed }));
+    setSetup(false);
+    setSheet(null);
+    setSelection(null);
+    setQuoteId(null);
+    setReport(null);
+    setFullReport(false);
+    setView("harbor");
+    setShowHint(true);
+    notify("항만장님, 첫 퀘스트가 도착했어요. 목표를 확인하고 필요한 준비를 시작해보세요.");
+  }
+  function openSheet(type) {
+    if (opRef.current) return;
+    setSetup(false);
+    setSheet(type);
+    setQuoteId(null);
+  }
+  function openBuild(nextCategory = "coordination", nextFuel = "all") {
+    if (!playing || opRef.current) return;
+    setCategory(nextCategory);
+    setFuel(nextFuel);
+    setQuoteId(null);
+    setSheet("build");
+    setShowHint(false);
+  }
+  function chooseScene(item) {
+    if (setup || opRef.current || report || evidence) return;
+    setSelection(item);
+    setShowHint(false);
+    setQuoteId(null);
+    if (item.kind === "project") {
+      setSheet("projects");
+      return;
+    }
+    if (item.kind === "rival") {
+      setSheet("world");
+      return;
+    }
+    if (item.kind === "ship" || item.id === "operations" || item.id === "anchorage") {
+      setFuel(item.fuel || "all");
+      setSheet(playing ? "operations" : "ledger");
+      return;
+    }
+    if (playing) openBuild(item.category || "supply", item.fuel || "all");
+    else setSheet("projects");
+  }
+  function inspectIssue() {
+    if (!issue) return;
+    const zone = harbor.zones.find((z) => z.id === issue.zoneId);
+    chooseScene({ kind: "zone", id: zone?.id || "operations", category: zone?.category || "operations", fuel: zone?.fuel || "all" });
+  }
+  function performQuestAction(action, quest) {
+    if (!action || !gameRef.current || opRef.current || report || gameRef.current.phase !== "playing") return;
+    setShowHint(false);
+    setView("harbor");
+    const zone = harbor.zones.find((item) => item.id === quest?.zoneId);
+    if (zone) setSelection({ kind: "zone", id: zone.id, category: zone.category, fuel: zone.fuel });
+    if (action.type === "build") {
+      const option = options.find((item) => item.id === action.optionId);
+      openBuild(option?.category || action.category || "operations", option?.fuel || action.fuel || "all");
+      if (option) setQuoteId(option.id);
+    } else if (action.type === "projects") {
+      const project = gameRef.current.projects.find((item) => item.id === action.projectId && item.ownerId === "korea");
+      if (project) setSelection({ kind: "project", id: project.id, category: project.category, fuel: project.fuel });
+      openSheet("projects");
+    } else if (action.type === "contracts") {
+      if (action.contractId) setSelection({ kind: "contract", id: action.contractId });
+      openSheet("contracts");
+    } else if (action.type === "operations") {
+      setFuel(action.fuel || "all");
+      openSheet("operations");
+    } else if (action.type === "ledger") openSheet("ledger");
+    else if (action.type === "advance") startOperation();
+  }
+  function order(option) {
+    const beforeIds = new Set(gameRef.current.projects.map((p) => p.id));
+    mutate((s) => orderProject(s, option.id), option.label + " 착수 · " + option.readyYear + "년 가동 예정", (next) => {
+      const p = next.projects.find((p2) => p2.ownerId === "korea" && !beforeIds.has(p2.id));
+      if (p) setSelection({ kind: "project", id: p.id, category: p.category, fuel: p.fuel });
+      setSheet(null);
+      setQuoteId(null);
+      setView("harbor");
+    });
+  }
+  function expand(project) {
+    mutate((s) => expandProject(s, project.id), "사업 범위를 확대했습니다. 가동 예정은 " + project.expandedReadyYear + "년입니다.");
+  }
+  function cancel(project) {
+    mutate((s) => cancelProject(s, project.id), "사업 취소 · " + money2(project.refund) + "억원 환급", () => setSelection(null));
+  }
+  function startOperation() {
+    if (!playing || opRef.current || report) return;
+    importRequestRef.current++;
+    setSheet(null);
+    setSelection(null);
+    setQuoteId(null);
+    setShowHint(false);
+    const token = { year: gameRef.current.year, progress: 0, paused: false, settled: false };
+    opRef.current = token;
+    if (reducedRef.current) {
+      finishOperation(token);
+      return;
+    }
+    setOperation({ ...token });
+  }
+  function finishOperation(token = opRef.current) {
+    if (!token || token !== opRef.current || token.settled || !gameRef.current || token.year !== gameRef.current.year) return;
+    token.settled = true;
+    try {
+      const result = advanceYear(gameRef.current);
+      if (!result.ok) {
+        notify(result.error, "error");
+        return;
+      }
+      commitState(result.state);
+      setReport(result.state.lastResult);
+      setFullReport(false);
+    } catch (error) {
+      notify("운영 결산을 완료하지 못했습니다: " + error.message, "error");
+    } finally {
+      opRef.current = null;
+      setOperation(null);
+    }
+  }
+  function pauseOperation() {
+    const token = opRef.current;
+    if (!token || token.settled) return;
+    token.paused = !token.paused;
+    setOperation({ ...token });
+  }
+  function exportLog() {
+    if (!gameRef.current) return;
+    try {
+      const blob = new Blob([exportGame(gameRef.current)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "GreenPort_v14_" + gameRef.current.year + "_" + gameRef.current.options.seed + ".json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1e3);
+      notify("캠페인과 의사결정 기록을 저장했습니다.");
+    } catch (error) {
+      notify("기록을 저장하지 못했습니다: " + error.message, "error");
+    }
+  }
+  async function importLog(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (opRef.current) {
+      notify("올해 운영을 마친 뒤 저장 파일을 불러오세요.", "error");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      notify("8MB 이하의 저장 파일을 선택하세요.", "error");
+      return;
+    }
+    const requestId = ++importRequestRef.current;
+    const initialGame = gameRef.current;
+    try {
+      const raw = await file.text();
+      if (requestId !== importRequestRef.current || gameRef.current !== initialGame || opRef.current) {
+        notify("파일을 읽는 동안 진행 상황이 바뀌어 불러오기를 취소했습니다. 필요하면 다시 파일을 선택하세요.", "error");
+        return;
+      }
+      const result = importGame(raw);
+      if (!result.ok) {
+        notify(result.error, "error");
+        return;
+      }
+      completedQuestsRef.current = null;
+      setQuestCelebration(null);
+      commitState(result.state);
+      setSetup(false);
+      setSheet(null);
+      setReport(null);
+      setFullReport(false);
+      setSelection(null);
+      setQuoteId(null);
+      setView("harbor");
+      notify(result.state.year + "년 캠페인을 불러왔습니다. 새 항만 화면에서 이어갈 수 있어요.");
+    } catch (error) {
+      if (requestId === importRequestRef.current) notify("저장 파일을 불러오지 못했습니다: " + error.message, "error");
+    }
+  }
+  function showWorld() {
+    if (opRef.current) return;
+    setView(view === "world" ? "harbor" : "world");
+    setSheet(null);
+    setSelection(null);
+  }
+  function closeSheet() {
+    setSheet(null);
+    setQuoteId(null);
+  }
+  const titles = { build: "이곳에서 다음 사업을 준비하세요", projects: "내 공사와 가동 시설", operations: "현장에서 운영을 바꿔보세요", contracts: "선사에게서 도착한 요청", world: "다른 항만의 움직임", ledger: "항만의 장부", milestones: "항만 성장 수첩", quests: "항만 성장 수첩", life: "우리 항만은 얼마나 활기찰까요?", menu: "항만장실" };
+  const steps = ["입항과 급유 선택", "작업과 공급", "출항과 실적 집계"];
+  const stepIndex = Math.min(2, Math.floor((operation?.progress || 0) * 3));
+  const ended = !!game && !playing;
+  const floatingNotifications = !!(notice || questCelebration) && !setup && !sheet && !operation && !report && !evidence;
+  const notifications = /* @__PURE__ */ React4.createElement(NotificationRail, { notice, celebration: !setup && !sheet ? questCelebration : null, activeQuest, onDismissNotice: () => setNotice(null), onDismissCelebration: () => setQuestCelebration(null), inline: !!(setup || sheet) });
+  return /* @__PURE__ */ React4.createElement("div", { className: cx("pt-game", setup && "pt-is-welcome", !!sheet && "pt-has-sheet", operation && "pt-is-operating", floatingNotifications && "pt-has-notification"), "data-testid": "game-shell", "data-ui-revision": "v14-mobile-1" }, /* @__PURE__ */ React4.createElement("input", { ref: fileRef, className: "pt-file-input", type: "file", accept: ".json,application/json", "data-testid": "import-log-input", "aria-label": "캠페인 저장 파일 선택", onChange: importLog }), /* @__PURE__ */ React4.createElement("div", { className: "pt-scene-layer" }, /* @__PURE__ */ React4.createElement(HarborScene, { state: sceneState, dashboard, preview, view, selected: selection, onSelect: chooseScene, motion: preferences.motion && !reducedRef.current && !operation?.paused, speed, operationProgress: operation?.progress || 0, buildingMode: sheet === "build", labels: preferences.labels, life, quest: activeQuest })), /* @__PURE__ */ React4.createElement("div", { className: "pt-scene-vignette", "aria-hidden": "true" }), /* @__PURE__ */ React4.createElement("header", { className: "pt-hud" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-brand" }, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(Glyph, { name: "anchor", size: 24 })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("strong", null, "GREEN PORT ", /* @__PURE__ */ React4.createElement("small", null, "v14")), /* @__PURE__ */ React4.createElement("p", null, "BUSAN GREEN HARBOR"))), !setup && /* @__PURE__ */ React4.createElement("div", { className: "pt-hud-resources" }, /* @__PURE__ */ React4.createElement("button", { className: "pt-cash", onClick: () => openSheet("ledger"), disabled: !!operation, "aria-label": "자금 장부 열기" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "coin", size: 23 }), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("small", null, "가용 자금"), /* @__PURE__ */ React4.createElement("strong", null, money2(dashboard.budget), /* @__PURE__ */ React4.createElement("em", null, "억")))), /* @__PURE__ */ React4.createElement("div", { className: "pt-hud-year" }, /* @__PURE__ */ React4.createElement("small", null, ended ? "운영 기록" : "지금의 선택"), /* @__PURE__ */ React4.createElement("strong", null, dashboard.year, /* @__PURE__ */ React4.createElement("em", null, "년")), /* @__PURE__ */ React4.createElement("span", null, Math.min(15, dashboard.history.length + (!ended ? 1 : 0)), " / 15"))), /* @__PURE__ */ React4.createElement("div", { className: "pt-hud-right" }, !setup && /* @__PURE__ */ React4.createElement("button", { className: "pt-stage-button", onClick: () => openSheet("quests"), disabled: !!operation }, /* @__PURE__ */ React4.createElement(Glyph, { name: "flag", size: 17 }), /* @__PURE__ */ React4.createElement("span", null, "기본 목표 ", quests.completedCount, " / ", quests.totalCount)), /* @__PURE__ */ React4.createElement("button", { className: "pt-hud-menu", "data-testid": "open-menu", "aria-label": "항만장실 메뉴", onClick: () => {
+    if (!setup) openSheet("menu");
+    else setEvidence(true);
+  }, disabled: !!operation }, /* @__PURE__ */ React4.createElement(Glyph, { name: setup ? "info" : "menu", size: 23 })))), setup ? /* @__PURE__ */ React4.createElement(Welcome, { notifications, settings, setSettings, hasGame: !!game, onStart: startCampaign, onContinue: () => setSetup(false), onImport: () => fileRef.current?.click() }) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, !sheet && !operation && !report && !ended && /* @__PURE__ */ React4.createElement(QuestCard, { board: quests, onAction: performQuestAction, onBoard: () => openSheet("quests") }), !sheet && !operation && !report && /* @__PURE__ */ React4.createElement("button", { className: "pt-harbor-mood pt-mood-" + life.id, "data-testid": "harbor-mood", onClick: () => openSheet("life"), "aria-label": "항만 분위기: " + life.label + ". 근거 확인" }, /* @__PURE__ */ React4.createElement(MoodFace, { id: life.id, size: 35 }), /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("small", null, life.asOfYear ? life.asOfYear + "년까지의 운영 풍경" : "첫 결산을 기다리는 항만"), /* @__PURE__ */ React4.createElement("strong", null, life.label)), /* @__PURE__ */ React4.createElement(Glyph, { name: "chevron", size: 16 })), !sheet && !operation && !report && !ended && /* @__PURE__ */ React4.createElement("div", { className: "pt-side-tools" }, /* @__PURE__ */ React4.createElement("button", { className: "pt-map-view", onClick: () => setView(view === "region" ? "harbor" : "region"), "aria-label": view === "region" ? "항만으로 확대" : "주변 지역 보기" }, /* @__PURE__ */ React4.createElement(Glyph, { name: view === "region" ? "anchor" : "globe", size: 18 }), view === "region" ? "항만" : "지역"), activeProjects2.length > 0 && /* @__PURE__ */ React4.createElement("button", { className: "pt-project-count", "data-testid": "open-projects", onClick: () => openSheet("projects") }, /* @__PURE__ */ React4.createElement(Glyph, { name: "build", size: 18 }), /* @__PURE__ */ React4.createElement("span", null, "진행 중 ", /* @__PURE__ */ React4.createElement("strong", null, activeProjects2.length)))), showHint && !activeQuest && !sheet && !operation && !report && !ended && /* @__PURE__ */ React4.createElement("div", { className: "pt-first-hint" }, /* @__PURE__ */ React4.createElement(Glyph, { name: "labels", size: 16 }), /* @__PURE__ */ React4.createElement("span", null, "시설·배·공사 현장을 눌러보세요"), /* @__PURE__ */ React4.createElement("button", { "aria-label": "조작 안내 닫기", onClick: () => setShowHint(false) }, /* @__PURE__ */ React4.createElement(Glyph, { name: "close", size: 14 }))), operation && /* @__PURE__ */ React4.createElement("section", { className: "pt-operation-replay", "aria-label": "올해 운영 재생" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-replay-title" }, /* @__PURE__ */ React4.createElement("span", { className: "pt-live-light" }), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("small", null, operation.year, "년 운영 중"), /* @__PURE__ */ React4.createElement("strong", null, operation.paused ? "잠시 멈췄습니다" : steps[stepIndex])), /* @__PURE__ */ React4.createElement("span", null, Math.round(operation.progress * 100), "%")), /* @__PURE__ */ React4.createElement("div", { className: "pt-replay-progress", "data-testid": "operation-progress", "data-progress": operation.progress, role: "progressbar", "aria-label": "연간 운영 재생", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": Math.round(operation.progress * 100) }, /* @__PURE__ */ React4.createElement("i", { style: { width: operation.progress * 100 + "%" } })), /* @__PURE__ */ React4.createElement("div", { className: "pt-replay-steps" }, steps.map((step, i) => /* @__PURE__ */ React4.createElement("span", { key: step, className: i <= stepIndex ? "is-active" : "" }, step))), /* @__PURE__ */ React4.createElement("div", { className: "pt-replay-controls" }, /* @__PURE__ */ React4.createElement("button", { "data-testid": "pause-operation", "aria-label": operation.paused ? "운영 재생 계속" : "운영 재생 일시정지", onClick: pauseOperation }, /* @__PURE__ */ React4.createElement(Glyph, { name: operation.paused ? "play" : "pause", size: 16 }), operation.paused ? "계속" : "일시정지"), /* @__PURE__ */ React4.createElement("div", null, [1, 2, 4].map((value) => /* @__PURE__ */ React4.createElement("button", { "data-testid": "speed-" + value, key: value, "aria-pressed": speed === value, onClick: () => setSpeed(value) }, value, "×"))), /* @__PURE__ */ React4.createElement("button", { "data-testid": "finish-operation", onClick: () => finishOperation() }, /* @__PURE__ */ React4.createElement("span", null, "결산 바로 보기"), /* @__PURE__ */ React4.createElement(Glyph, { name: "next", size: 16 }))), /* @__PURE__ */ React4.createElement("small", null, "연간 급유 흐름을 축약해 재생합니다. 결산은 한 번만 반영됩니다.")), ended && !report && !sheet && /* @__PURE__ */ React4.createElement("section", { className: cx("pt-end-card", game.phase === "bankrupt" && "is-bankrupt"), "data-testid": "campaign-summary" }, /* @__PURE__ */ React4.createElement("span", { className: "pt-end-icon" }, /* @__PURE__ */ React4.createElement(Glyph, { name: game.phase === "bankrupt" ? "alert" : "flag", size: 31 })), /* @__PURE__ */ React4.createElement("span", { className: "pt-eyebrow" }, game.phase === "bankrupt" ? "자금 부족 · 캠페인 미완주" : "2026–2040 · 캠페인 완주"), /* @__PURE__ */ React4.createElement("h1", null, game.phase === "bankrupt" ? "다시 준비할 항만의 미래" : "당신이 만든 항만의 기록"), /* @__PURE__ */ React4.createElement("strong", { className: "pt-final-score" }, n3(dashboard.score.cumulativeCapture), /* @__PURE__ */ React4.createElement("small", null, "%")), /* @__PURE__ */ React4.createElement("p", null, game.phase === "bankrupt" ? "운영한 기간의 누적 포획률 · 완주 성적이 아닙니다." : "15년 동안 확보한 급유 기회의 누적 포획률"), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement(Button, { primary: true, icon: "book", onClick: () => openSheet("ledger") }, "성과와 장부 보기"), /* @__PURE__ */ React4.createElement(Button, { icon: "reset", "data-testid": "new-campaign", onClick: () => setSetup(true) }, "다른 항만 시작"))), !operation && /* @__PURE__ */ React4.createElement("nav", { className: "pt-dock", "aria-label": "항만 도구" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-dock-tools" }, /* @__PURE__ */ React4.createElement("button", { "data-testid": "open-build", className: sheet === "build" ? "is-active" : "", onClick: () => openBuild(), disabled: !playing }, /* @__PURE__ */ React4.createElement(Glyph, { name: "build", size: 23 }), /* @__PURE__ */ React4.createElement("span", null, "건설")), /* @__PURE__ */ React4.createElement("button", { "data-testid": "open-operations", className: sheet === "operations" ? "is-active" : "", onClick: () => {
+    setFuel("all");
+    openSheet("operations");
+  }, disabled: !playing }, /* @__PURE__ */ React4.createElement(Glyph, { name: "work", size: 23 }), /* @__PURE__ */ React4.createElement("span", null, "운영")), /* @__PURE__ */ React4.createElement("button", { "data-testid": "open-contracts", className: sheet === "contracts" ? "is-active" : "", onClick: () => openSheet("contracts") }, /* @__PURE__ */ React4.createElement(Glyph, { name: "mail", size: 23 }), /* @__PURE__ */ React4.createElement("span", null, "선사 요청"), offers.length > 0 && /* @__PURE__ */ React4.createElement("i", null, offers.length)), /* @__PURE__ */ React4.createElement("button", { "data-testid": "open-world", className: view === "world" ? "is-active" : "", onClick: showWorld }, /* @__PURE__ */ React4.createElement(Glyph, { name: "globe", size: 23 }), /* @__PURE__ */ React4.createElement("span", null, view === "world" ? "우리 항만" : "세계 항만")), /* @__PURE__ */ React4.createElement("button", { "data-testid": "open-ledger", className: sheet === "ledger" ? "is-active" : "", onClick: () => openSheet("ledger") }, /* @__PURE__ */ React4.createElement(Glyph, { name: "book", size: 23 }), /* @__PURE__ */ React4.createElement("span", null, "장부"))), playing && /* @__PURE__ */ React4.createElement("button", { className: "pt-operate-button", "data-testid": "advance-year", onClick: startOperation, disabled: !!report }, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement("small", null, dashboard.year, "년 계획을 마쳤다면"), /* @__PURE__ */ React4.createElement("strong", null, "올해 운영 시작")), /* @__PURE__ */ React4.createElement(Glyph, { name: "play", size: 20 }))), !sheet && !operation && /* @__PURE__ */ React4.createElement("div", { className: "pt-map-caption" }, view === "world" ? "급유 경쟁망 · 4개 항만의 모형 내 관계를 보여주는 도식" : view === "region" ? "부산·울산 연계 · 실제 거리와 지형을 재현하지 않은 게임 지도" : "부산 중심 친환경 급유 거점 · 장면은 연간 운영의 축약 표현")), sheet && !setup && !operation && /* @__PURE__ */ React4.createElement(BottomSheet, { title: titles[sheet], eyebrow: sheet === "build" ? "선택한 위치에서 계획 → 가동까지" : sheet === "menu" ? "HARBOR MASTER OFFICE" : "GREEN PORT · 현장 조작", onClose: closeSheet, wide: ["build", "operations", "ledger", "contracts", "quests", "milestones"].includes(sheet) }, notifications, sheet === "build" && /* @__PURE__ */ React4.createElement(BuildPanel, { options, category, setCategory, fuel, setFuel, quote, onQuote: setQuoteId, onOrder: order, dashboard, onProjects: () => setSheet("projects") }), sheet === "projects" && /* @__PURE__ */ React4.createElement(ProjectsPanel, { dashboard, focusId: selection?.kind === "project" ? selection.id : null, onExpand: expand, onCancel: cancel, onBuild: () => openBuild("supply", "all") }), sheet === "operations" && /* @__PURE__ */ React4.createElement(OperationsPanel, { dashboard, preview, fuel, onPrice: (value) => mutate((s) => setPricePolicy(s, value), value ? "올해 " + Math.round(value * 100) + "% 할인 정책을 적용했습니다." : "올해 정가 정책을 적용했습니다."), onImprove: openBuild }), sheet === "contracts" && /* @__PURE__ */ React4.createElement(ContractsPanel, { focusId: selection?.kind === "contract" ? selection.id : null, offers, contracts: dashboard.contracts, onAccept: (offer) => mutate((s) => acceptContract(s, offer.id), offer.label + "을 맡았습니다. 가동 기한을 확인하세요."), onLater: closeSheet }), sheet === "world" && /* @__PURE__ */ React4.createElement(WorldPanel, { dashboard, selectedId: selectedRival, onSelect: (id) => setSelection({ kind: "rival", id }), onReturn: () => {
+    setView("harbor");
+    setSheet(null);
+  } }), sheet === "ledger" && /* @__PURE__ */ React4.createElement(LedgerPanel, { dashboard, preview, onReport: () => {
+    setReport(game.lastResult);
+    setFullReport(true);
+    setSheet(null);
+  } }), ["quests", "milestones"].includes(sheet) && /* @__PURE__ */ React4.createElement(QuestBoard, { board: quests, life, harbor, onAction: performQuestAction, onLedger: () => openSheet("ledger") }), sheet === "life" && /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(HarborLifePanel, { life, onLedger: () => openSheet("ledger") }), /* @__PURE__ */ React4.createElement(Button, { icon: "flag", onClick: () => openSheet("quests") }, "다음 성장 목표 보기")), sheet === "menu" && /* @__PURE__ */ React4.createElement("div", { className: "pt-office" }, /* @__PURE__ */ React4.createElement("div", { className: "pt-save-note" }, /* @__PURE__ */ React4.createElement("i", null), saveStatus || "저장 상태 확인 중"), /* @__PURE__ */ React4.createElement("div", { className: "pt-office-actions" }, /* @__PURE__ */ React4.createElement(Button, { icon: "flag", onClick: () => openSheet("quests") }, "퀘스트와 성장 배지"), /* @__PURE__ */ React4.createElement(Button, { icon: "download", "data-testid": "export-log", onClick: exportLog }, "캠페인 기록 저장"), /* @__PURE__ */ React4.createElement(Button, { icon: "upload", "data-testid": "import-log", onClick: () => fileRef.current?.click() }, "저장 파일 불러오기"), /* @__PURE__ */ React4.createElement(Button, { icon: "reset", "data-testid": "new-campaign", onClick: () => {
+    setSheet(null);
+    setSetup(true);
+  } }, "새 캠페인 설정"), /* @__PURE__ */ React4.createElement(Button, { icon: "info", "data-testid": "open-evidence", onClick: () => {
+    setSheet(null);
+    setEvidence(true);
+  } }, "연구 근거·게임 가정")), /* @__PURE__ */ React4.createElement("div", { className: "pt-view-settings" }, /* @__PURE__ */ React4.createElement("label", null, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(Glyph, { name: "play", size: 17 }), "항만 움직임"), /* @__PURE__ */ React4.createElement("input", { type: "checkbox", checked: preferences.motion, onChange: (e) => setPreferences({ ...preferences, motion: e.target.checked }) })), /* @__PURE__ */ React4.createElement("label", null, /* @__PURE__ */ React4.createElement("span", null, /* @__PURE__ */ React4.createElement(Glyph, { name: "labels", size: 17 }), "시설 이름 표시"), /* @__PURE__ */ React4.createElement("input", { type: "checkbox", checked: preferences.labels, onChange: (e) => setPreferences({ ...preferences, labels: e.target.checked }) }))), /* @__PURE__ */ React4.createElement("div", { className: "pt-office-help" }, /* @__PURE__ */ React4.createElement("h3", null, "항만을 움직이는 방법"), /* @__PURE__ */ React4.createElement("p", null, "퀘스트의 다음 행동을 따라 시설을 준비하고, 계획을 마쳤다면 ", /* @__PURE__ */ React4.createElement("strong", null, "올해 운영 시작"), "을 누르세요. 재생 중에는 일시정지·배속·즉시 결산을 선택할 수 있습니다."), /* @__PURE__ */ React4.createElement("p", null, "시설의 비용·가동 연도와 실제 능력은 연결되어 있습니다. 장면의 배와 장비는 연간 흐름을 대표하며, 개별 선박을 실시간으로 배정하는 모형은 아닙니다."), /* @__PURE__ */ React4.createElement("small", null, "GREEN PORT 화면 v14 · 모바일 화면 개선 · v11 캠페인 저장 호환")))), report && !fullReport && /* @__PURE__ */ React4.createElement("div", { className: "pt-report-backdrop" }, /* @__PURE__ */ React4.createElement(CompactReport, { result: report, dashboard, nextCompletions: playing ? game.completedThisYear || [] : [], onClose: () => setReport(null), onDetails: () => setFullReport(true) })), report && fullReport && /* @__PURE__ */ React4.createElement("div", { className: "gp-app pt-legacy-overlay" }, /* @__PURE__ */ React4.createElement(AnnualReport, { result: report, dashboard, finished: !playing, onClose: () => {
+    setReport(null);
+    setFullReport(false);
+  } })), evidence && /* @__PURE__ */ React4.createElement("div", { className: "gp-app pt-legacy-overlay" }, /* @__PURE__ */ React4.createElement(Evidence, { onClose: () => setEvidence(false) })), !setup && !sheet && !operation && !report && !evidence && notifications);
+}
+
+// .build/single-entry.jsx
+var css = '.hs-scene{position:absolute;inset:0;overflow:hidden;background:#27b4cf;color:#fff9de;--hs-speed:1;isolation:isolate}.hs-map{display:block;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;outline:none}.hs-map:active{cursor:grabbing}.hs-hotspot{cursor:pointer;outline:none}.hs-zone-button .hs-zone-plaque{transition:fill .15s,stroke .15s}.hs-zone-button:hover .hs-zone-plaque,.hs-zone-button:focus-visible .hs-zone-plaque{fill:#fff1b8;stroke:#f6c74e;stroke-width:2.5}.hs-zone-button:hover .hs-zone-rich,.hs-zone-button:focus-visible .hs-zone-rich{display:inline}.hs-hotspot:focus-visible>ellipse,.hs-hotspot:focus-visible>polygon{stroke:#fff0a0;stroke-width:4}.hs-project:focus-visible>g:first-of-type>polygon,.hs-project.is-selected>g:first-of-type>polygon{stroke:#fff3a5;stroke-width:2.5}.hs-vessel:focus-visible>ellipse{stroke:#fff7c5;stroke-width:3;stroke-dasharray:6 5}.hs-camera{position:absolute;right:22px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;border:2px solid #fff6d8;border-radius:17px;background:#fff4d6ed;box-shadow:0 5px #487e9052,0 12px 28px #145e7c26;z-index:3}.hs-camera button{display:grid;place-items:center;border:0;width:44px;height:44px;border-radius:11px;background:#f9eccb;color:#345d76;font:750 25px/1 system-ui,sans-serif;cursor:pointer;touch-action:manipulation;box-shadow:inset 0 2px #fff9e6;transition:background .15s,transform .15s}.hs-camera button:hover{background:#ffe8a6;color:#255b75;transform:translateY(-1px)}.hs-camera button:active{transform:translateY(1px)}.hs-camera button:disabled{opacity:.4;cursor:default;transform:none}.hs-camera button:focus-visible{outline:3px solid #3ea9bb;outline-offset:1px}.hs-camera>span{height:1px;width:25px;background:#b9b28c65;margin:3px 0}.hs-scene-note{position:absolute;left:22px;bottom:104px;display:flex;align-items:center;gap:7px;padding:8px 11px;border-radius:11px;background:#f6f2d4dc;box-shadow:0 2px #34859425;font-size:11px;font-weight:650;line-height:1.4;pointer-events:none;color:#346b7b;border:1px solid #fff9db;max-width:calc(100% - 105px)}.hs-scene-note small{font-size:10px;color:#648a8c;font-weight:500;padding-left:7px;border-left:1px solid #b4c4a9}.hs-scene-live-dot{width:6px;height:6px;border-radius:50%;background:#28ad90;box-shadow:0 0 0 3px #28ad9017}.hs-water{animation:hs-water-drift calc(45s / var(--hs-speed)) linear infinite}.hs-signal{animation:hs-signal calc(3s / var(--hs-speed)) ease-in-out infinite}.hs-truck{animation:hs-road-travel calc(22s / var(--hs-speed)) ease-in-out infinite}.hs-crane-hook{animation:hs-hoist calc(7s / var(--hs-speed)) ease-in-out infinite}.hs-fuel-flow{stroke-dasharray:10 4;animation:hs-fuel-flow calc(2s / var(--hs-speed)) linear infinite}.hs-docked-ship{animation:hs-bob calc(8s / var(--hs-speed)) ease-in-out infinite}.hs-arriving-ship{animation:hs-arrive calc(30s / var(--hs-speed)) linear infinite}.hs-passing-ship{animation:hs-passing calc(32s / var(--hs-speed)) linear infinite}.hs-alert{animation:hs-alert calc(4s / var(--hs-speed)) ease-in-out infinite}.hs-excavator-arm{animation:hs-excavate calc(5s / var(--hs-speed)) ease-in-out infinite}.hs-world-route{animation:hs-fuel-flow calc(6s / var(--hs-speed)) linear infinite}.hs-worker-walk{animation:hs-worker-stroll calc(10s / var(--hs-speed)) ease-in-out infinite}.hs-villager-walk{animation:hs-villager-stroll calc(15s / var(--hs-speed)) ease-in-out infinite}.hs-bunting-flag{animation:hs-flag-flutter calc(4s / var(--hs-speed)) ease-in-out infinite;transform-box:fill-box;transform-origin:50% 0}.hs-lamp-glow{animation:hs-lamp-glow calc(5s / var(--hs-speed)) ease-in-out infinite}.hs-cat-tail{animation:hs-cat-tail calc(6s / var(--hs-speed)) ease-in-out infinite;transform-origin:5px -2px}.hs-market-balloons{animation:hs-balloons calc(7s / var(--hs-speed)) ease-in-out infinite;transform-box:fill-box;transform-origin:50% 100%}.hs-gulls{animation:hs-gulls calc(24s / var(--hs-speed)) ease-in-out infinite}.hs-quest-ring{animation:hs-quest-ring calc(9s / var(--hs-speed)) linear infinite}.hs-quest-bob{animation:hs-quest-bob calc(3s / var(--hs-speed)) ease-in-out infinite}.hs-quest-marker:focus-visible>g>g>path:first-child,.hs-quest-marker:hover>g>g>path:first-child{fill:#fff2a4;stroke:#d59432;stroke-width:3.5}.hs-mood-closed .hs-truck,.hs-mood-closed .hs-crane-hook,.hs-mood-closed .hs-fuel-flow,.hs-mood-closed .hs-arriving-ship,.hs-mood-closed .hs-docked-ship,.hs-mood-closed .hs-passing-ship{animation-play-state:paused}.hs-mood-struggling .hs-scene-live-dot,.hs-mood-closed .hs-scene-live-dot{background:#b38d72;box-shadow:0 0 0 3px #b38d7222}.hs-mood-quiet .hs-scene-live-dot{background:#9fa76e}.hs-mood-thriving .hs-scene-live-dot{background:#2bad87;box-shadow:0 0 0 3px #2bad8729}.hs-paused .hs-animated{animation-play-state:paused!important}.hs-building .hs-hotspot{cursor:crosshair}@keyframes hs-water-drift{0%{transform:translate(0)}to{transform:translate(184px,126px)}}@keyframes hs-signal{0%,to{opacity:1}50%{opacity:.45}}@keyframes hs-road-travel{0%,to{transform:translate(0)}45%,55%{transform:translate(57px,28.5px)}}@keyframes hs-hoist{0%,to{transform:translate(0)}50%{transform:translateY(-18px)}}@keyframes hs-fuel-flow{to{stroke-dashoffset:-56}}@keyframes hs-bob{0%,to{transform:translate(0)}50%{transform:translate(1px,-2px)}}@keyframes hs-arrive{0%,to{transform:translate(-30px,15px);opacity:.55}25%,75%{opacity:1}90%{transform:translate(30px,-15px);opacity:.55}}@keyframes hs-passing{0%{transform:translate(0);opacity:.95}80%{transform:translate(-75px,37.5px);opacity:.95}to{transform:translate(-95px,47.5px);opacity:.3}}@keyframes hs-alert{0%,88%,to{opacity:1}94%{opacity:.65}}@keyframes hs-excavate{0%,to{transform:translate(0)}50%{transform:translate(-2px,4px)}}@keyframes hs-worker-stroll{0%,to{transform:translate(0)}45%,55%{transform:translate(10px,5px)}}@keyframes hs-villager-stroll{0%,to{transform:translate(0)}40%,60%{transform:translate(-12px,6px)}}@keyframes hs-flag-flutter{0%,to{transform:skew(0)}50%{transform:skew(-9deg)}}@keyframes hs-lamp-glow{0%,to{opacity:.21}50%{opacity:.36}}@keyframes hs-cat-tail{0%,82%,to{transform:rotate(0)}90%{transform:rotate(-12deg)}}@keyframes hs-balloons{0%,to{rotate:-2deg}50%{rotate:3deg}}@keyframes hs-gulls{0%,to{transform:translate(0)}50%{transform:translate(15px,-5px)}}@keyframes hs-quest-ring{to{stroke-dashoffset:-96}}@keyframes hs-quest-bob{0%,to{transform:translateY(0)}50%{transform:translateY(-6px)}}@media (max-width:700px){.hs-camera{right:12px;top:45%;padding:4px;border-radius:14px}.hs-camera button{width:44px;height:44px}.hs-scene-note{left:12px;bottom:100px;font-size:10px;padding:7px 9px;max-width:calc(100% - 25px)}.hs-scene-note small{display:none}}@media (prefers-reduced-motion:reduce){.hs-scene .hs-animated{animation:none!important}.hs-scene *{scroll-behavior:auto!important;transition:none!important}}.gp-app{font-family:Inter,Pretendard,Noto Sans KR,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#e9f2f6;background:#08131f;font-synthesis:none;font-weight:400;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;font-size:14px;color-scheme:dark}:where(.gp-app),:where(.gp-app) *{box-sizing:border-box}:where(.gp-app) button,:where(.gp-app) input,:where(.gp-app) select{font:inherit}:where(.gp-app) button{cursor:pointer;color:inherit;border:0}:where(.gp-app) button:disabled{cursor:not-allowed;opacity:.45}:where(.gp-app) button,:where(.gp-app) a,:where(.gp-app) input,:where(.gp-app) summary{-webkit-tap-highlight-color:transparent}:where(.gp-app) button:focus-visible,:where(.gp-app) a:focus-visible,:where(.gp-app) input:focus-visible,:where(.gp-app) summary:focus-visible{outline:2px solid #69e6c0;outline-offset:4px}:where(.gp-app) button svg{flex-shrink:0}:where(.gp-app) h1,:where(.gp-app) h2,:where(.gp-app) h3,:where(.gp-app) h4,:where(.gp-app) p{margin:0}:where(.gp-app) h1,:where(.gp-app) h2,:where(.gp-app) h3,:where(.gp-app) h4{word-break:keep-all;line-height:1.45}:where(.gp-app) p{line-height:1.75;word-break:keep-all}:where(.gp-app) button,:where(.gp-app) summary,:where(.gp-app) a{touch-action:manipulation}.gp-app{min-height:100vh;background:radial-gradient(ellipse at 89% 0%,#14343655 0,transparent 32%),#08131f}.gp-app ul{padding-left:18px}.gp-app h2{font-size:20px;letter-spacing:-.55px}.gp-app h3{font-size:15px;letter-spacing:-.2px}.gp-muted{color:#91a6b7}.gp-small{font-size:11.5px;line-height:1.65}.gp-positive{color:#61dfb9!important}.gp-negative{color:#ff9c8b!important}.gp-file-input{position:fixed;left:-9999px;opacity:0;width:1px;height:1px}.gp-eyebrow{display:flex;align-items:center;gap:8px;font-size:10px;letter-spacing:1.55px;font-weight:700;color:#71cbb8;line-height:1.5;margin-bottom:6px}.gp-live-dot{width:6px;height:6px;border-radius:100%;background:#4bdcae;box-shadow:0 0 12px #4bdcae88}.gp-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:39px;padding:10px 15px;border-radius:8px;font-size:12px;font-weight:650;letter-spacing:-.1px;line-height:1.4;transition:background .16s,border-color .16s,transform .16s;border:1px solid transparent;text-decoration:none}.gp-button:not(:disabled):active{transform:translateY(1px)}.gp-button-primary{background:#46d7ab;color:#052a25;border-color:#46d7ab}.gp-button-primary:hover:not(:disabled){background:#74e7c3;border-color:#74e7c3}.gp-button-outline{background:#13233366;border-color:#334859;color:#d6e6ec}.gp-button-outline:hover:not(:disabled){background:#233a49;border-color:#557285}.gp-button-ghost{background:transparent;color:#a8bcc8}.gp-button-ghost:hover{color:#eef9fc;background:#152b3b}.gp-button-quiet{background:transparent;color:#8fa8b8}.gp-button-quiet:hover:not(:disabled){background:#1e2c38;color:#f1b49f}.gp-button-small{font-size:11px;min-height:32px;padding:7px 10px}.gp-button-full{width:100%}.gp-button-selected{color:#77e2c4;background:#163e3c;border-color:#3d917c}.gp-icon-button{width:36px;height:36px;padding:8px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;background:transparent;color:#a0b7c6;border:1px solid transparent}.gp-icon-button:hover{color:#d9f8ed;background:#1d3442;border-color:#2b4855}.gp-tag{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;font-weight:600;line-height:1.4;color:#b2c7d3;background:#213441;border:1px solid #304855;padding:5px 9px;border-radius:5px}.gp-tag-soft{background:#13332e;border-color:#245347;color:#98d7c3}.gp-topbar{height:84px;padding:0 max(28px,calc((100vw - 1440px)/2));display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #263b493d;background:#08131fbf}.gp-brand{display:flex;align-items:center;gap:11px;flex-shrink:0}.gp-brand-icon{width:42px;height:42px;display:grid;place-items:center;color:#64e1b9;background:#143930;border:1px solid #286451;border-radius:12px}.gp-brand strong{display:flex;align-items:center;gap:9px;font-size:20px;line-height:1.2;letter-spacing:1.35px;font-weight:800}.gp-brand strong span{font-size:11px;font-weight:600;letter-spacing:.2px;color:#7da995;background:#16382f;padding:3px 5px;border-radius:3px}.gp-brand small{display:block;font-size:10px;letter-spacing:2.1px;color:#718f9c;margin-top:4px}.gp-top-actions{display:flex;align-items:center;gap:7px}.gp-save-status{font-size:10px;color:#8ba89f;display:flex;align-items:center;gap:5px;margin-right:10px}.gp-save-status i{height:4px;width:4px;background:#68cba3;border-radius:100%}.gp-main{max-width:1440px;margin:auto;padding:34px 28px 60px}.gp-campaign-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:25px;gap:20px}.gp-campaign-heading h1{font-size:38px;font-weight:750;letter-spacing:-1.5px;line-height:1.2}.gp-campaign-heading h1 span{font-size:27px;color:#b8cbd4;font-weight:400;margin-left:8px;letter-spacing:-1px}.gp-campaign-tags{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}.gp-campaign-tags span{font-size:11px;color:#94abba;line-height:1.3}.gp-campaign-tags span+span:before{content:"·";color:#506c7c;margin-right:8px}.gp-timeline{width:330px;max-width:40%;padding-top:12px}.gp-timeline>div:first-child{display:flex;justify-content:space-between;color:#8fa7b8;font-size:11px;line-height:1.4;margin-bottom:9px}.gp-timeline strong{color:#c4dfd9;font-size:11px}.gp-timeline-track{display:flex;gap:5px}.gp-timeline-track i{height:5px;border-radius:3px;flex:1;background:#253746}.gp-timeline-track i.is-done{background:#31a780}.gp-timeline-track i.is-current{background:#81f2d1;box-shadow:0 0 10px #61d2b444}.gp-timeline-years{display:flex;justify-content:space-between;color:#5e7b8f;font-size:10px;margin-top:7px}.gp-stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:21px}.gp-stat{border:1px solid #283e4d;background:#102231;border-radius:11px;padding:20px 21px;min-width:0}.gp-stat-accent{background:linear-gradient(115deg,#163a34,#112d2f);border-color:#2b5c4f}.gp-stat-label{display:flex;justify-content:space-between;align-items:center;gap:9px;color:#adc1ce;font-size:11px;font-weight:550}.gp-stat-label svg{color:#638a9b}.gp-stat-accent .gp-stat-label svg{color:#6dc2a8}.gp-stat-value{font-size:32px;font-weight:750;letter-spacing:-1.1px;line-height:1.25;margin:10px 0 8px;font-variant-numeric:tabular-nums;white-space:nowrap}.gp-stat-accent .gp-stat-value{color:#7ce7bf}.gp-stat-value small{font-size:13px;font-weight:450;letter-spacing:-.3px;color:#90adae;margin-left:7px}.gp-stat p{color:#839eaf;font-size:10px;line-height:1.5;word-break:keep-all}.gp-stat-accent p{color:#87b7aa}.gp-market-brief{display:flex;align-items:center;justify-content:space-between;gap:25px;padding:21px 24px;border:1px solid #263f4f;background:#101f2d;border-radius:11px;margin-bottom:23px}.gp-market-news{display:flex;align-items:flex-start;gap:17px;flex:1;min-width:0}.gp-news-label{display:inline-flex;border-left:2px solid #7eabca;padding-left:10px;color:#95b3c9;font-size:11px;letter-spacing:1.2px;line-height:1.7;width:67px;flex-shrink:0;margin-top:4px}.gp-market-news h2{font-size:15px;margin-bottom:4px;letter-spacing:-.2px}.gp-market-news p{font-size:11.5px;color:#8fa7b6;line-height:1.65}.gp-event-effects{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.gp-event-effects span{font-size:10px;background:#1d3342;color:#afcad4;padding:3px 7px;border-radius:4px}.gp-fuel-market{width:245px;flex-shrink:0;border-left:1px solid #294251;padding-left:25px}.gp-fuel-market>div:first-child{display:flex;justify-content:space-between;align-items:baseline;font-size:10px;color:#8ba5b6}.gp-fuel-market strong{font-size:19px;font-variant-numeric:tabular-nums;color:#dce8ee;letter-spacing:-.4px}.gp-fuel-market strong small{font-size:10px;font-weight:400;margin-left:5px;color:#8aa6b7}.gp-fuel-split{display:flex;height:5px;border-radius:4px;overflow:hidden;gap:2px;margin:10px 0 7px;background:#273b49}.gp-fuel-split i:first-child{background:#47c8b8}.gp-fuel-split i:last-child{background:#b8a3e7}.gp-fuel-market-legend{display:flex;justify-content:space-between;font-size:10px;color:#94aebe}.gp-fuel-market-legend span:first-child{color:#81c9c0}.gp-fuel-market-legend span:last-child{color:#bbabe3}.gp-warnings{margin-bottom:20px;display:grid;gap:7px}.gp-warnings>div{display:flex;gap:9px;align-items:center;background:#362c1b66;border:1px solid #69523266;border-radius:8px;padding:11px 14px;color:#ddbd80;font-size:12px;line-height:1.5}.gp-warnings svg{flex-shrink:0}.gp-workspace{display:grid;grid-template-columns:minmax(0,1fr) 304px;gap:22px;align-items:start}.gp-workspace-main{display:flex;flex-direction:column;gap:20px;min-width:0}.gp-panel{background:#102130;border:1px solid #283e4d;border-radius:12px;padding:23px;min-width:0}.gp-section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:21px}.gp-section-heading .gp-eyebrow{font-size:11px;color:#6b9e9c;letter-spacing:1.4px;margin-bottom:5px}.gp-section-description{font-size:12px;color:#94abba;line-height:1.7;margin-top:-10px;margin-bottom:20px}.gp-service-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.gp-service-card{padding:18px;background:#0b1c2a;border:1px solid #243d4b;border-radius:8px;min-width:0}.gp-service-head{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-bottom:18px}.gp-fuel{display:inline-flex;align-items:center;white-space:nowrap;gap:5px;font-size:10px;font-weight:600;line-height:1.3;padding:4px 7px;border:1px solid #385464;border-radius:4px;color:#b2c7d4;background:#213341}.gp-fuel:before{content:"";width:4px;height:4px;border-radius:100%;background:currentColor}.gp-fuel-methanol{background:#173b38;color:#7cdfc9;border-color:#24574e}.gp-fuel-ammonia{background:#302b43;color:#c7b4f3;border-color:#51456c}.gp-fuel-both{background:#2f3346;color:#b8c9e6;border-color:#485879}.gp-status{display:inline-flex;align-items:center;gap:4px;font-size:10px;line-height:1.5;color:#a2b6c0;white-space:nowrap}.gp-status i{width:4px;height:4px;border-radius:100%;background:currentColor}.gp-status.is-good{color:#7bc5aa}.gp-status.is-waiting{color:#cfb280}.gp-service-capacity{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px}.gp-service-capacity>div+div{border-left:1px solid #253b48;padding-left:20px}.gp-service-capacity small{display:block;color:#839eb0;font-size:10px;margin-bottom:6px}.gp-service-capacity strong{font-size:23px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.6px}.gp-service-capacity strong span{font-size:10px;color:#8da7b7;font-weight:450;margin-left:6px}.gp-meter{margin-bottom:14px}.gp-meter>div:first-child{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:10px;color:#8fa9ba}.gp-meter strong{font-size:12px;color:#c7e3de;font-weight:600;font-variant-numeric:tabular-nums}.gp-meter strong small{font-weight:400;font-size:11px;margin-left:2px;color:#81a298}.gp-meter-track{height:4px;background:#263a46;border-radius:4px;overflow:hidden}.gp-meter-track>span{display:block;height:100%;background:#38b992;border-radius:4px;transition:width .3s}.gp-meter-blue .gp-meter-track>span{background:#5b9ec4}.gp-meter>small{font-size:10px;color:#7896a5;line-height:1.4}.gp-service-foot{display:flex;justify-content:space-between;gap:6px;padding-top:12px;border-top:1px solid #223846;font-size:11px;color:#6f8fa3}.gp-service-foot strong{font-size:10px;font-weight:550;color:#b0c6d0;margin-left:4px}.gp-diagnoses{margin-top:17px;display:grid;gap:10px}.gp-diagnosis{display:flex;align-items:flex-start;gap:11px;background:#142a38;border:1px solid #2b4554;border-radius:7px;padding:12px 14px}.gp-diagnosis:first-child{background:#19342f88;border-color:#315549}.gp-diagnosis-icon{color:#78b4a4;padding-top:1px;flex-shrink:0}.gp-diagnosis strong{font-size:12px;color:#c4dcd6;line-height:1.5}.gp-diagnosis p{font-size:11px;line-height:1.6;color:#8faab5;margin-top:3px}.gp-capabilities{margin-top:16px;border-top:1px solid #283c4a;padding-top:13px}.gp-capabilities summary{display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;color:#86a3b5;font-size:11px;padding:4px 0}.gp-capabilities summary::-webkit-details-marker{display:none}.gp-capabilities[open] summary svg{transform:rotate(90deg)}.gp-capability-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px}.gp-capability-item{border:1px solid #263c4b;border-radius:6px;padding:11px;background:#0d1d2b}.gp-capability-item>div{display:flex;justify-content:space-between;gap:8px;font-size:11px;margin-bottom:5px;color:#b7cdd8}.gp-capability-item strong{color:#7bc9b4;font-size:11px;white-space:nowrap}.gp-capability-item p{font-size:10px;line-height:1.6;color:#7e9aad}.gp-capability-item .gp-fuel{margin-top:7px;font-size:10px}.gp-category-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid #2a4150;border-radius:8px;overflow:hidden;background:#0c1c2a;margin-bottom:18px}.gp-category-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:53px;background:transparent;font-size:12px;font-weight:550;color:#8fa8ba;line-height:1.5;border-right:1px solid #263e4d}.gp-category-tabs button:last-child{border-right:0}.gp-category-tabs button.is-active{background:#1a3d36;color:#86e4c1;box-shadow:inset 0 -2px #56cfa5}.gp-category-tabs button:hover:not(.is-active){background:#172b3b;color:#cadce7}.gp-catalog-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px}.gp-catalog-tools>span{font-size:10px;color:#6e8a9e}.gp-filter-group{display:flex;gap:4px;flex-wrap:wrap}.gp-filter-group button{background:transparent;border:1px solid transparent;color:#8ba5b5;padding:6px 10px;border-radius:5px;font-size:10px;line-height:1.3}.gp-filter-group button.is-active{background:#253d4d;color:#d0e3ec;border-color:#385469}.gp-filter-group button:hover:not(.is-active){background:#1b303f}.gp-project-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.gp-project-card{display:flex;flex-direction:column;border:1px solid #304756;border-radius:9px;padding:17px;background:#112532;transition:border-color .18s,background .18s}.gp-project-card.is-selected{border-color:#55c5a1;background:#16362f;box-shadow:0 0 0 1px #55c5a122}.gp-project-card.is-unavailable{background:#0e202d}.gp-project-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}.gp-project-scale{font-size:11px;color:#7d9aab}.gp-project-card h3{font-size:15px;color:#dbe8ed;line-height:1.55;margin-bottom:6px;letter-spacing:-.35px}.gp-project-description{color:#8da7b7;font-size:11px;line-height:1.7;margin-bottom:12px;flex:1}.gp-project-effect{display:flex;align-items:flex-start;gap:7px;color:#84b8a9;font-size:10px;line-height:1.55;padding:9px 10px;border:1px solid #35514b66;border-radius:5px;background:#1d383144;margin-bottom:14px}.gp-project-effect svg{flex-shrink:0;margin-top:1px}.gp-project-terms{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:15px}.gp-project-terms small{display:block;font-size:11px;color:#6f8c9d;margin-bottom:5px}.gp-project-terms strong{font-size:17px;color:#cfdee5;letter-spacing:-.4px;white-space:nowrap}.gp-project-terms strong span{font-size:11px;font-weight:400;margin-left:3px;color:#87a3b3}.gp-project-reason{display:flex;gap:5px;align-items:flex-start;font-size:10px;line-height:1.5;color:#bd9c76;margin-top:-3px;margin-bottom:11px}.gp-project-reason svg{flex-shrink:0;margin-top:1px}.gp-project-card>.gp-button{font-size:11px;margin-top:auto;min-height:35px;justify-content:space-between}.gp-project-card.is-selected>.gp-button{justify-content:center}.gp-empty{text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px;padding:30px 18px;color:#7394a8}.gp-empty strong{font-size:13px;color:#a6becb;font-weight:550}.gp-empty p{font-size:11px;color:#728fa2;max-width:420px}.gp-empty-horizontal{flex-direction:row;text-align:left;gap:17px;padding:13px 0}.gp-empty-horizontal p{margin-top:5px}.gp-empty svg{flex-shrink:0}.gp-decision-sidebar{position:sticky;top:20px;align-self:start}.gp-decision-panel{padding:20px;background:linear-gradient(155deg,#183033,#102330 55%);border-color:#35564f}.gp-decision-title{display:flex;align-items:center;gap:9px;color:#91d6bd;margin-bottom:18px}.gp-decision-title h2{font-size:15px;letter-spacing:-.3px;color:#d2e9e0}.gp-cash-line{display:flex;align-items:center;justify-content:space-between;padding-bottom:17px;border-bottom:1px solid #2c4948;margin-bottom:18px}.gp-cash-line>span{font-size:11px;color:#88a9ad}.gp-cash-line strong{font-size:27px;font-weight:700;letter-spacing:-.8px;color:#8fe6c4}.gp-cash-line small{font-size:12px;margin-left:5px;color:#8cafab}.gp-selected-quote{background:#0c211f66;border:1px solid #3d6b59;border-radius:8px;padding:15px;margin-bottom:17px}.gp-selected-head{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-bottom:11px}.gp-selected-head>span:last-child{font-size:11px;color:#8dbaaa}.gp-selected-quote h3{font-size:14px;margin-bottom:7px;color:#d9eee3}.gp-selected-quote>p{font-size:10px;line-height:1.65;color:#92b5aa}.gp-selected-quote dl{margin:15px 0}.gp-selected-quote dl>div{display:flex;justify-content:space-between;gap:8px;padding:7px 0;font-size:10px;line-height:1.4}.gp-selected-quote dt{color:#8eaaa8}.gp-selected-quote dd{margin:0;font-weight:600;color:#c9e0d6;font-variant-numeric:tabular-nums}.gp-selected-quote .gp-quote-balance{border-top:1px solid #2e5145;margin-top:5px;padding-top:11px}.gp-selected-quote .gp-button{font-size:12px}.gp-selected-quote .gp-inline-error{font-size:10px;color:#e6b192;margin-top:10px}.gp-no-selection{display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:11px 2px 24px;color:#6da995}.gp-no-selection strong{color:#bdd4ca;font-size:13px}.gp-no-selection p{font-size:11px;color:#829da7;line-height:1.7}.gp-commitment{display:flex;justify-content:space-between;gap:10px;font-size:10px;line-height:1.5;padding:6px 0;color:#819eab}.gp-commitment strong{color:#c7d9df;font-size:11px;white-space:nowrap}.gp-decision-panel>.gp-small{margin-top:5px;font-size:11px;line-height:1.65;color:#6e8c9b}.gp-price-policy{margin-top:20px;padding-top:19px;border-top:1px solid #2b434c}.gp-price-policy>div:first-child{display:flex;align-items:center;justify-content:space-between;color:#6e91a2;margin-bottom:11px}.gp-price-policy h3{font-size:11px;font-weight:600;color:#b6cbd5}.gp-discount-group{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #314b59;border-radius:6px;overflow:hidden;background:#0e1e2b}.gp-discount-group button{min-height:34px;color:#7e9bab;background:transparent;font-size:11px;border-right:1px solid #29414f}.gp-discount-group button:last-child{border-right:0}.gp-discount-group button.is-active{color:#a9e5cc;background:#234438;font-weight:650}.gp-discount-group button:hover:not(:disabled){color:#d7e9e3;background:#1b3640}.gp-price-policy p{font-size:11px;line-height:1.65;margin-top:8px;color:#6f8d9d}.gp-year-preview{background:#0c1b28;border:1px solid #263f4c;border-radius:7px;padding:12px;margin:20px 0 15px}.gp-year-preview>div{display:flex;align-items:center;justify-content:space-between;gap:5px;font-size:10px;color:#829dae;line-height:1.6}.gp-year-preview>div+div{margin-top:9px}.gp-year-preview strong{font-size:16px;color:#d1e3e7;font-weight:600;font-variant-numeric:tabular-nums}.gp-year-preview small{font-size:11px;margin-left:4px;color:#7c99a9}.gp-warning-inline{display:flex;align-items:flex-start;gap:8px;color:#e9b39a;font-size:10px;line-height:1.55;padding:0 2px;margin-bottom:14px}.gp-warning-inline svg{flex-shrink:0}.gp-settle-button{justify-content:space-between;min-height:45px;font-size:12px}.gp-decision-caption{text-align:center;font-size:11px;line-height:1.75;color:#688b99;margin-top:12px}.gp-ledger{display:flex;flex-direction:column}.gp-ledger-row{display:flex;align-items:flex-start;gap:12px;padding:17px 0;border-top:1px solid #283e4c}.gp-ledger-row:first-child{padding-top:0;border-top:0}.gp-ledger-row:last-child{padding-bottom:0}.gp-project-stage{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:#292e32;color:#c0a67c;flex-shrink:0;border:1px solid #45443e}.gp-stage-active,.gp-stage-operating,.gp-stage-completed{background:#19392e;border-color:#315d48;color:#88cfa9}.gp-ledger-main{flex:1;min-width:0}.gp-ledger-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px}.gp-ledger-title h3{font-size:12px;line-height:1.5;color:#c0d5df}.gp-ledger-title .gp-status{font-size:11px}.gp-ledger-meta{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px;color:#7d99aa}.gp-ledger-meta .gp-fuel{font-size:10px;padding:3px 5px}.gp-ledger-note{font-size:10px;line-height:1.5;margin-top:8px;color:#b59f7f}.gp-ledger-actions{display:flex;align-items:flex-end;flex-direction:column;gap:4px;max-width:150px;flex-shrink:0}.gp-ledger-actions .gp-button{font-size:10px;min-height:28px;line-height:1.45}.gp-contract-active-list,.gp-contract-offers{display:grid;grid-template-columns:1fr 1fr;gap:13px}.gp-contract-active-list{margin-bottom:17px}.gp-active-contract{background:#0b2328;border:1px solid #2f554f;padding:16px;border-radius:8px}.gp-active-contract>div:first-child{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.gp-active-contract h3{font-size:13px;margin-bottom:5px}.gp-active-contract>p{font-size:10px;color:#7f9faa;margin-bottom:12px}.gp-contract-progress{display:flex;justify-content:space-between;gap:10px;font-size:10px;color:#84a4ac;line-height:1.6;margin:9px 0 5px}.gp-contract-progress strong{font-size:10px;color:#b8d6d4;font-variant-numeric:tabular-nums}.gp-active-contract details{font-size:10px;color:#89a6ad;margin-top:10px}.gp-active-contract summary{cursor:pointer;line-height:1.6}.gp-active-contract ul{font-size:10px;line-height:1.8;margin:9px 0 0;color:#7797a3}.gp-contract-offer{border:1px solid #314451;border-radius:8px;padding:17px;display:flex;flex-direction:column;background:#142431}.gp-offer-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}.gp-offer-top>span:last-child{font-size:11px;color:#c3aa80}.gp-contract-offer h3{font-size:14px;line-height:1.5;margin-bottom:13px;color:#d0e0e7}.gp-offer-volume{display:flex;align-items:baseline;justify-content:space-between;gap:7px;margin-bottom:9px}.gp-offer-volume strong{font-size:23px;font-weight:650;letter-spacing:-.5px;color:#d6e7e9}.gp-offer-volume small{font-size:11px;margin-left:7px;font-weight:400;color:#7f9aaa;letter-spacing:0}.gp-offer-volume>span{font-size:11px;color:#7995a8}.gp-requirements{display:flex;flex-direction:column;gap:5px;padding:0!important;list-style:none;margin:8px 0 15px;flex:1}.gp-requirements li{display:flex;gap:6px;align-items:flex-start;font-size:10px;line-height:1.55;color:#90acb9}.gp-requirements svg{flex-shrink:0;color:#6aa691;margin-top:2px}.gp-contract-prices{padding:10px 0;border-top:1px solid #2c4352;margin-top:auto;margin-bottom:8px}.gp-contract-prices>span{display:flex;justify-content:space-between;gap:5px;font-size:11px;color:#7693a6;line-height:1.9}.gp-contract-prices strong{color:#a8c2cb;font-size:11px;font-weight:500}.gp-contract-offer>.gp-button{font-size:10px}.gp-table-scroll{overflow-x:auto;overscroll-behavior-x:contain}.gp-competition-table,.gp-result-table{border-collapse:collapse;width:100%;min-width:550px;font-size:11px}.gp-competition-table th,.gp-result-table th{text-align:right;color:#7391a4;font-size:11px;font-weight:500;padding:0 11px 13px;border-bottom:1px solid #304453;white-space:nowrap}.gp-competition-table th:first-child,.gp-result-table th:first-child{text-align:left;padding-left:0}.gp-competition-table th:last-child{text-align:left;padding-right:0}.gp-competition-table td,.gp-result-table td{text-align:right;padding:14px 11px;border-bottom:1px solid #233a49;color:#b4cbd6;font-variant-numeric:tabular-nums;vertical-align:middle}.gp-competition-table tr:last-child td,.gp-result-table tr:last-child td{border-bottom:0}.gp-competition-table td:first-child,.gp-result-table td:first-child{text-align:left;padding-left:0}.gp-competition-table td:last-child{text-align:left;padding-right:0;max-width:185px}.gp-competition-table td:first-child strong{font-size:12px;color:#cadce4;display:block;line-height:1.45;word-break:keep-all}.gp-competition-table td small{display:block;font-size:11px;font-weight:400;color:#6c8b9e;margin-top:5px;line-height:1.55}.gp-competition-table td:first-child small{max-width:140px}.gp-competition-table tr.is-player td{background:#1a3e3022}.gp-competition-table tr.is-player td:first-child strong{color:#85d9b6}.gp-mini-track{height:3px;width:73px;margin:6px 0 0 auto;background:#253d49;border-radius:2px;overflow:hidden}.gp-mini-track span{display:block;height:100%;background:#6c98b2}.is-player .gp-mini-track span{background:#4bcca3}.gp-upcoming{display:block;font-size:11px;color:#96afba;line-height:1.6}.gp-table-note{font-size:10px;color:#6c8a9d;margin-top:13px;border-top:1px solid #253d4a;padding-top:12px}.gp-history-chart{width:100%}.gp-history-chart svg{display:block;width:100%;height:auto;overflow:visible}.gp-chart-empty{display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;min-height:150px;border:1px dashed #2b4556;border-radius:8px;color:#5d8c9a}.gp-chart-empty p{font-size:11px;color:#7291a5}.gp-forecast-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}.gp-forecast-grid>div{border-left:1px solid #2b4352;padding-left:17px}.gp-forecast-grid>div:first-child{border-left:0;padding-left:0}.gp-forecast-grid strong{font-size:12px;color:#b6ccd7}.gp-forecast-grid span{display:flex;justify-content:space-between;font-size:11px;color:#7594a7;line-height:1.8}.gp-forecast-grid b{font-weight:500;color:#aac2cc;font-variant-numeric:tabular-nums}.gp-page-footer{max-width:1440px;padding:22px 28px 30px;margin:auto;border-top:1px solid #1b3343;display:flex;justify-content:space-between;gap:15px;color:#4d7185;font-size:11px;line-height:1.7}.gp-toast{position:fixed;bottom:25px;left:50%;transform:translate(-50%);width:max-content;max-width:min(90vw,650px);z-index:100;display:flex;align-items:flex-start;gap:10px;padding:15px 16px;border-radius:10px;background:#1b493b;border:1px solid #548c6f;color:#c6f5df;box-shadow:0 12px 35px #0007;font-size:12px;line-height:1.6;animation:gpToastIn .2s ease-out}.gp-toast>svg{flex-shrink:0;margin-top:1px}.gp-toast>span{flex:1;word-break:keep-all}.gp-toast button{display:grid;place-items:center;background:transparent;color:inherit;padding:3px;margin-left:8px}.gp-toast-error{background:#4b2928;border-color:#945d50;color:#ffd1bd}.gp-modal-backdrop{position:fixed;inset:0;z-index:80;background:#020911bd;backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:25px;overflow:hidden}.gp-modal{width:700px;max-width:100%;max-height:calc(100dvh - 50px);border:1px solid #3b5562;border-radius:16px;background:#10212f;box-shadow:0 25px 100px #0008;display:flex;flex-direction:column;overflow:hidden}.gp-modal-wide{width:1000px}.gp-modal-head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:25px 28px 23px;border-bottom:1px solid #2d4552;background:#132835;flex-shrink:0}.gp-modal-head h2{font-size:23px}.gp-modal-head .gp-eyebrow{font-size:11px}.gp-modal-body{padding:26px 28px;overflow-y:auto;overscroll-behavior:contain;min-height:0}.gp-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:19px 28px;border-top:1px solid #2b4351;background:#102330;flex-shrink:0}.gp-evidence p{font-size:12px;line-height:1.9;color:#9fb8c5}.gp-evidence .gp-intro-note{font-size:13px;line-height:1.9;color:#bdcfd8;margin-bottom:25px}.gp-intro-note strong{color:#81dfbc}.gp-evidence article{border-bottom:1px solid #2b4352;padding-bottom:21px;margin-bottom:22px}.gp-evidence article .gp-tag{font-size:11px;margin-bottom:9px;background:#213b3a;color:#91c7b5;border-color:#355b4d}.gp-evidence h3{font-size:15px;line-height:1.5;margin-bottom:11px;color:#d5e7e8}.gp-evidence article p+p{margin-top:9px;font-size:11px;color:#7e9dab}.gp-definition-list{font-size:11px;margin:12px 0 22px}.gp-definition-list>div{display:grid;grid-template-columns:110px 1fr;gap:15px;padding:10px 0;border-bottom:1px solid #233d4a;line-height:1.75}.gp-definition-list dt{font-weight:600;color:#b1cbd4}.gp-definition-list dd{margin:0;color:#82a1b2}.gp-note{display:flex;gap:10px;align-items:flex-start;color:#94b3bd;background:#152d3a;border:1px solid #2c4c5b;border-radius:8px;padding:14px;font-size:11px;line-height:1.8}.gp-note svg{flex-shrink:0;margin-top:2px}.gp-report-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:21px}.gp-report-stats .gp-stat{padding:16px}.gp-report-stats .gp-stat-value{font-size:27px}.gp-allocation{margin-bottom:25px}.gp-allocation-bar{height:9px;display:flex;border-radius:4px;overflow:hidden;background:#263947;gap:2px}.gp-allocation-korea{background:#49cda4}.gp-allocation-competitors{background:#638fac}.gp-allocation-defer{background:#3b4c60}.gp-allocation-legend{display:flex;gap:25px;margin-top:10px;flex-wrap:wrap}.gp-allocation-legend>span{display:flex;align-items:center;gap:6px;font-size:10px;color:#89a6b6}.gp-allocation-legend i{display:block;width:6px;height:6px;border-radius:2px}.gp-allocation-legend strong{font-size:10px;color:#c8dbe4;font-weight:600;margin-left:3px}.gp-completion-note{display:flex;gap:10px;align-items:flex-start;padding:13px 15px;background:#17382e;border:1px solid #2f5a47;border-radius:8px;color:#8fdcba;margin-bottom:23px}.gp-completion-note svg{flex-shrink:0;margin-top:2px}.gp-completion-note strong{font-size:11px}.gp-completion-note p{font-size:10px;line-height:1.7;color:#86b7a6;margin-top:4px}.gp-report-grid{display:grid;grid-template-columns:1fr 1fr;gap:23px;align-items:start}.gp-report-section{margin-bottom:26px;min-width:0}.gp-report-section h3{font-size:14px;color:#bfd4dd;margin-bottom:17px}.gp-finance-table{border:1px solid #2c4554;border-radius:8px;padding:9px 15px;background:#0c1d2a}.gp-finance-table>div{display:flex;justify-content:space-between;gap:10px;padding:8px 0;font-size:11px;color:#91acba;line-height:1.5}.gp-finance-table strong{font-size:12px;font-weight:550;color:#bed2dc;font-variant-numeric:tabular-nums}.gp-finance-table strong small{font-size:11px;color:#7293a5;margin-left:5px;font-weight:400}.gp-finance-table .gp-finance-total{border-top:1px solid #38535e;margin-top:6px;padding-top:12px;color:#b3d8ce}.gp-finance-total strong{font-size:18px;color:#7ad7b2}.gp-bridge-summary{display:flex;align-items:center;gap:9px;color:#688e9d;font-size:11px;margin-bottom:16px;flex-wrap:wrap}.gp-bridge-summary strong{font-size:13px;color:#aec9d5;margin-left:4px}.gp-bridge-summary small{font-size:10px}.gp-bridge-row{display:grid;grid-template-columns:100px 1fr 50px;gap:9px;align-items:center;margin:13px 0}.gp-bridge-row>span{font-size:10px;color:#8da9b9;line-height:1.5}.gp-bridge-row>div{height:6px;background:#253b49;border-radius:3px}.gp-bridge-row i{display:block;min-width:0;height:6px;background:#4aaa8c;border-radius:3px}.gp-bridge-row i.is-negative{background:#c38b78}.gp-bridge-row strong{font-size:11px;text-align:right;font-variant-numeric:tabular-nums;font-weight:550}.gp-method-note{font-size:11px;color:#6f8fa2;margin-top:17px}.gp-source-comparison{margin-top:18px;padding:13px;border-radius:7px;border:1px solid #2c4656;background:#112a36}.gp-source-comparison h4{font-size:10px;color:#adc7cf;margin-bottom:10px}.gp-source-comparison>div{display:flex;justify-content:space-between;gap:8px;margin:6px 0;font-size:10px;color:#85a6b5}.gp-source-comparison strong{font-size:11px;color:#a3d1bf;font-weight:550}.gp-source-comparison p{font-size:11px;color:#6d92a2;line-height:1.7;margin-top:9px}.gp-result-table th,.gp-result-table td{font-size:10px;padding:12px 10px}.gp-result-table th{font-size:11px}.gp-report-section>.gp-small{font-size:11px;margin-top:9px}.gp-contract-result{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px;border:1px solid #2b4656;border-radius:6px;margin-top:8px;font-size:10px;color:#91acba}.gp-contract-result strong{font-size:11px;color:#bbd1d9;margin-right:auto}.gp-explanation-list{list-style:none;padding:0!important;margin:0;display:flex;flex-direction:column;gap:10px}.gp-explanation-list li{font-size:11px;color:#8faebb;line-height:1.75;padding-left:12px;position:relative}.gp-explanation-list li:before{content:"";position:absolute;top:8px;left:0;height:3px;width:3px;border-radius:100%;background:#5e9e99}.gp-setup{min-height:100vh;background:radial-gradient(ellipse at 14% 22%,#0e494238,transparent 40%)}.gp-setup-grid{max-width:1400px;margin:auto;padding:54px 34px 64px;display:grid;grid-template-columns:minmax(0,1fr) minmax(490px,560px);gap:66px;align-items:start}.gp-setup-story{padding-top:29px;min-width:0}.gp-setup-story>.gp-eyebrow{font-size:10px;letter-spacing:1.8px;color:#77bba7;margin-bottom:21px}.gp-setup-story h1{font-size:clamp(31px,3.1vw,44px);letter-spacing:-2px;font-weight:650;line-height:1.5;color:#e2f0ef}.gp-setup-story h1 em{font-style:normal;color:#71ddb0;font-weight:700}.gp-setup-lead{font-size:14px;line-height:1.95;color:#89a8b9;margin-top:22px;letter-spacing:-.25px}.gp-harbor-art{width:100%;height:auto;margin:17px 0 10px;overflow:visible}.gp-story-principles{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding-top:18px;border-top:1px solid #29423e}.gp-story-principles>div>span{display:block;font-size:10px;color:#5a9e8e;letter-spacing:1px;margin-bottom:10px}.gp-story-principles strong{font-size:12px;color:#b2d2cb;font-weight:550}.gp-story-principles p{font-size:10px;color:#678c9d;margin-top:5px;line-height:1.7}.gp-assumption-line{font-size:11px;display:flex;gap:7px;align-items:flex-start;color:#527f8e;line-height:1.8;margin-top:27px}.gp-assumption-line svg{flex-shrink:0;margin-top:2px}.gp-setup-panel{background:#102330e6;border:1px solid #2c4651;border-radius:15px;padding:27px;box-shadow:0 20px 65px #0002}.gp-setup-panel .gp-section-heading{margin-bottom:24px}.gp-setup-panel .gp-section-heading h2{font-size:22px;letter-spacing:-.7px}.gp-setup-panel .gp-tag{font-size:11px;padding:4px 7px}.gp-choice-group{border:0;padding:0;margin:0 0 21px;min-width:0}.gp-choice-group legend{font-size:11px;font-weight:550;color:#b6ccd5;margin-bottom:10px;padding:0}.gp-choice-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.gp-choice{display:flex;flex-direction:column;gap:9px;border:1px solid #2b4353;border-radius:7px;padding:13px 11px;background:#0c1e2c;cursor:pointer;transition:background .16s,border-color .16s;min-width:0}.gp-choice:hover{border-color:#51796c}.gp-choice.is-selected{border-color:#4ea280;background:#173b31;box-shadow:0 0 0 1px #35634f33}.gp-choice input{position:absolute;opacity:0;width:1px;height:1px}.gp-choice:has(input:focus-visible){outline:2px solid #6ae1bd;outline-offset:3px}.gp-choice-top{display:flex;align-items:center;justify-content:space-between;gap:5px}.gp-choice-top strong{font-size:11px;font-weight:550;line-height:1.5;color:#b3ccd8;word-break:keep-all}.gp-choice.is-selected strong{color:#bfe8d5}.gp-radio-mark{width:14px;height:14px;border:1px solid #415a69;border-radius:100%;display:grid;place-items:center;color:#0b3524;flex-shrink:0}.is-selected .gp-radio-mark{background:#63d2a6;border-color:#63d2a6}.gp-choice>span:last-child{font-size:11px;line-height:1.8;color:#6f92a7;word-break:keep-all}.gp-choice.is-selected>span:last-child{color:#8db8a7}.gp-choice-compact{margin-bottom:16px}.gp-choice-compact .gp-choice{gap:7px;padding:11px}.gp-setup-detail{display:grid;grid-template-columns:66px 105px 1fr;align-items:center;gap:10px;font-size:10px;color:#7190a3;border-top:1px solid #294150;padding-top:16px;margin-bottom:20px}.gp-setup-detail label{font-size:10px;color:#93adbc}.gp-setup-detail input{background:#0b1c2a;border:1px solid #304a5c;border-radius:5px;min-width:0;width:100%;padding:7px 8px;color:#a9c2d0;font-size:10px;appearance:textfield}.gp-setup-detail span{font-size:11px;line-height:1.6}.gp-start-button{min-height:45px;font-size:12px;justify-content:space-between}.gp-setup-panel>.gp-button+.gp-button{margin-top:9px;min-height:37px;font-size:11px}.gp-setup-footnote{margin-top:14px;font-size:11px;line-height:1.8;color:#6c8c9f}.gp-summary{max-width:1100px;margin:auto;padding:42px 30px 70px}.gp-summary-hero{text-align:center;padding:33px 20px 35px;background:radial-gradient(ellipse at 50% 45%,#1c5c4644,transparent 58%)}.gp-summary-hero>.gp-eyebrow{justify-content:center;color:#659c8e;font-size:10px;letter-spacing:1.9px;margin-bottom:25px}.gp-summary-icon{display:grid;place-items:center;width:66px;height:66px;border:1px solid #315f4b;border-radius:20px;background:#173a2f;color:#81dbb7;margin:0 auto 24px}.gp-summary h1{font-size:33px;font-weight:600;letter-spacing:-1.2px;color:#d4e8e4;line-height:1.5;margin-bottom:14px}.gp-summary-hero>p{max-width:590px;margin:0 auto;font-size:12px;line-height:1.85;color:#87a8b6}.gp-summary-score{display:flex;align-items:center;justify-content:center;gap:12px;margin:22px 0 25px}.gp-summary-score>strong{font-size:76px;font-weight:650;line-height:1.2;letter-spacing:-4px;color:#78e1b3;font-variant-numeric:tabular-nums}.gp-summary-score>span{color:#9bc5b8;font-size:23px;text-align:left;padding-top:9px}.gp-summary-score small{display:block;font-size:10px;margin-top:3px;color:#6c9d94}.gp-summary-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}.gp-summary-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;margin:12px 0 25px}.gp-summary-note{display:flex;gap:12px;align-items:flex-start;padding:22px 5px;color:#618b9c}.gp-summary-note svg{flex-shrink:0;margin-top:3px}.gp-summary-note p{font-size:11px;line-height:1.9;color:#6d92a5}.gp-summary .gp-result-table{margin-top:18px}.gp-summary .gp-result-table td{font-size:10px}@keyframes gpToastIn{0%{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%)}}@media (min-width:1500px){.gp-topbar{padding-left:calc((100vw - 1384px)/2);padding-right:calc((100vw - 1384px)/2)}}@media (max-width:1150px){.gp-workspace{grid-template-columns:minmax(0,1fr) 280px;gap:17px}.gp-panel{padding:19px}.gp-stat{padding:17px}.gp-stat-value{font-size:28px}.gp-project-grid{gap:10px}.gp-project-card{padding:14px}.gp-category-tabs button{gap:5px;font-size:11px}.gp-setup-grid{gap:35px;padding:40px 28px 60px;grid-template-columns:minmax(0,1fr) minmax(455px,510px)}.gp-setup-story{padding-top:35px}.gp-setup-story h1{font-size:33px}.gp-setup-panel{padding:23px}.gp-setup-lead{font-size:12px}.gp-service-head{align-items:flex-start;flex-direction:column;gap:9px}.gp-service-capacity>div+div{padding-left:12px}.gp-ledger-row{flex-wrap:wrap}.gp-ledger-actions{max-width:none;margin-left:46px;flex-direction:row;flex-wrap:wrap}.gp-contract-active-list,.gp-contract-offers{grid-template-columns:1fr}.gp-contract-offer{display:grid;grid-template-columns:1fr auto;column-gap:20px}.gp-offer-top{grid-column:1/-1}.gp-contract-offer h3{grid-column:1}.gp-offer-volume{grid-column:2;grid-row:2;flex-direction:column;align-items:flex-end}.gp-requirements,.gp-contract-prices{grid-column:1/-1}.gp-contract-offer>.gp-button{grid-column:1/-1}.gp-fuel-market{width:210px;padding-left:20px}.gp-stat p{font-size:11px}.gp-service-card{padding:15px}.gp-category-tabs button svg{width:17px}.gp-stat-label{font-size:10px}.gp-decision-panel{padding:17px}.gp-save-status{display:none}}@media (max-width:920px){.gp-setup-grid{grid-template-columns:1fr;max-width:690px;gap:30px;padding-top:22px}.gp-setup-story{padding-top:5px}.gp-setup-story h1{font-size:33px}.gp-setup-lead{font-size:13px;margin-top:15px}.gp-harbor-art{max-width:360px;display:block;margin:5px auto 0}.gp-story-principles,.gp-assumption-line{display:none}.gp-setup-story>.gp-eyebrow{margin-bottom:14px}.gp-setup-panel{padding:25px}.gp-workspace{grid-template-columns:1fr}.gp-decision-sidebar{position:static;grid-row:1}.gp-decision-panel{display:grid;grid-template-columns:1fr 1fr;column-gap:22px;padding:20px}.gp-decision-title{grid-column:1;margin-bottom:12px}.gp-cash-line{grid-column:2;grid-row:1;margin-bottom:10px;padding:0;border:0;align-items:flex-start}.gp-selected-quote,.gp-no-selection{grid-column:1;grid-row:2/7;margin-bottom:0}.gp-no-selection{min-height:160px;border:1px dashed #34504e;border-radius:8px;padding:17px;justify-content:center}.gp-commitment{grid-column:2;padding:3px 0}.gp-decision-panel>.gp-small{grid-column:2}.gp-price-policy{grid-column:2;margin-top:13px;padding-top:12px}.gp-year-preview{grid-column:1;margin:15px 0 0;grid-row:7/10}.gp-settle-button{grid-column:2;grid-row:7;margin-top:15px}.gp-decision-caption{grid-column:2;grid-row:8/10;margin-top:8px;font-size:11px}.gp-warning-inline{grid-column:1/-1;margin-top:12px;margin-bottom:0;grid-row:10}.gp-service-head{flex-direction:row;align-items:center}.gp-contract-active-list,.gp-contract-offers{grid-template-columns:1fr 1fr}.gp-contract-offer{display:flex}.gp-offer-volume{flex-direction:row;align-items:baseline}.gp-main{padding-top:27px}.gp-market-brief{gap:20px}.gp-stats-grid{gap:11px}.gp-stat-value{font-size:26px}.gp-stat-label svg{width:15px}.gp-stat{padding:17px 15px}.gp-ledger-row{flex-wrap:nowrap}.gp-ledger-actions{flex-direction:column;max-width:160px;margin-left:0}.gp-topbar{padding:0 28px}.gp-report-grid{gap:18px}}@media (max-width:680px){.gp-app{font-size:13px}.gp-topbar{height:70px;padding:0 17px}.gp-brand{gap:8px}.gp-brand-icon{width:35px;height:35px;border-radius:10px}.gp-brand-icon svg{width:22px}.gp-brand strong{font-size:16px;letter-spacing:.8px;gap:6px}.gp-brand small{font-size:6.5px;letter-spacing:1.5px;margin-top:3px}.gp-brand strong span{font-size:10px;padding:2px 4px}.gp-top-actions{gap:3px}.gp-top-actions .gp-button{padding:8px 9px;font-size:10px;min-height:34px}.gp-top-actions .gp-button-ghost>span{display:none}.gp-top-actions .gp-button-ghost{padding:7px}.gp-top-actions .gp-icon-button{width:31px;height:31px;padding:6px}.gp-main{padding:23px 16px 40px}.gp-campaign-heading{margin-bottom:22px;gap:13px;align-items:flex-start}.gp-campaign-heading h1{font-size:32px}.gp-campaign-heading h1 span{font-size:22px;margin-left:6px}.gp-campaign-heading .gp-eyebrow{font-size:10px;letter-spacing:1px}.gp-campaign-tags{gap:6px;margin-top:9px}.gp-campaign-tags span{font-size:11px}.gp-campaign-tags span+span:before{margin-right:6px}.gp-timeline{padding-top:7px;width:165px;max-width:36%}.gp-timeline>div:first-child{font-size:11px;gap:8px}.gp-timeline>div:first-child>span{display:none}.gp-timeline>div:first-child strong{margin-left:auto;font-size:10px}.gp-timeline-track{gap:3px}.gp-timeline-track i{height:4px}.gp-timeline-years{font-size:10px}.gp-stats-grid{grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}.gp-stat{padding:16px}.gp-stat-value{font-size:29px;margin:8px 0}.gp-stat-value small{font-size:11px;margin-left:5px}.gp-stat-label{font-size:10px}.gp-stat p{font-size:11px;line-height:1.65}.gp-market-brief{display:block;padding:17px;margin-bottom:17px}.gp-market-news{gap:11px}.gp-news-label{font-size:10px;width:53px;padding-left:8px}.gp-market-news h2{font-size:13px}.gp-market-news p{font-size:10px;line-height:1.7}.gp-event-effects{margin-top:8px}.gp-event-effects span{font-size:10px}.gp-fuel-market{border-left:0;border-top:1px solid #263f4d;width:100%;margin-top:16px;padding:13px 0 0}.gp-fuel-market>div:first-child{font-size:11px}.gp-fuel-market strong{font-size:16px}.gp-fuel-split{margin:8px 0 5px}.gp-fuel-market-legend{font-size:11px}.gp-workspace-main{gap:16px}.gp-panel{padding:17px;border-radius:10px}.gp-section-heading{margin-bottom:17px;gap:9px;align-items:flex-start}.gp-app h2{font-size:17px;letter-spacing:-.45px}.gp-section-heading .gp-eyebrow{font-size:10px;letter-spacing:1.1px}.gp-section-heading>.gp-tag{font-size:10px;padding:4px 6px;margin-top:3px}.gp-section-heading>.gp-small{font-size:10px;max-width:125px;text-align:right;line-height:1.65}.gp-service-grid{gap:10px}.gp-service-card{padding:12px}.gp-service-head{flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:14px}.gp-service-head .gp-status{font-size:10px}.gp-fuel{font-size:11px}.gp-service-capacity{gap:7px;margin-bottom:14px}.gp-service-capacity>div+div{padding-left:9px}.gp-service-capacity small{font-size:10px;margin-bottom:5px;line-height:1.5}.gp-service-capacity strong{font-size:20px}.gp-service-capacity strong span{font-size:10px;margin-left:3px}.gp-meter>div:first-child{font-size:10px;gap:3px}.gp-meter strong,.gp-meter strong small{font-size:10px}.gp-service-foot{font-size:10px;flex-direction:column;gap:7px}.gp-service-foot strong{font-size:11px}.gp-meter{margin-bottom:11px}.gp-diagnosis{padding:11px;gap:9px}.gp-diagnosis strong{font-size:11px}.gp-diagnosis p{font-size:10px}.gp-capability-grid{grid-template-columns:1fr}.gp-capabilities summary{font-size:10px}.gp-category-tabs{margin-bottom:13px}.gp-category-tabs button{min-height:54px;flex-direction:column;gap:5px;font-size:10px}.gp-category-tabs button svg{width:17px;height:17px}.gp-catalog-tools{gap:5px;margin-bottom:13px}.gp-filter-group{gap:2px}.gp-filter-group button{font-size:11px;padding:5px 8px}.gp-catalog-tools>span{font-size:10px}.gp-project-grid{gap:10px}.gp-project-card{padding:13px}.gp-project-card h3{font-size:13px;line-height:1.55;min-height:40px}.gp-project-head{gap:5px;margin-bottom:10px}.gp-project-scale{font-size:10px}.gp-project-description{font-size:10px;line-height:1.7;margin-bottom:10px}.gp-project-effect{font-size:11px;line-height:1.5;padding:8px;gap:5px;min-height:44px;margin-bottom:12px}.gp-project-effect svg{width:13px}.gp-project-terms{grid-template-columns:1fr 1fr;gap:10px 6px;margin-bottom:12px}.gp-project-terms>div:last-child{grid-column:1/-1;display:flex;gap:6px;align-items:baseline}.gp-project-terms>div:last-child small{margin-bottom:0}.gp-project-terms>div:last-child strong{font-size:11px}.gp-project-terms small{font-size:10px}.gp-project-terms strong{font-size:17px}.gp-project-terms strong span{font-size:10px}.gp-project-reason{font-size:11px;margin-bottom:10px}.gp-project-card>.gp-button{min-height:32px;font-size:10px;padding:7px 9px}.gp-decision-panel{padding:16px;column-gap:15px}.gp-decision-title{gap:7px;margin-bottom:14px}.gp-decision-title h2{font-size:13px}.gp-decision-title svg{width:17px}.gp-cash-line>span{font-size:11px;max-width:65px;line-height:1.5}.gp-cash-line strong{font-size:22px}.gp-cash-line small{font-size:11px;margin-left:3px}.gp-selected-quote{padding:12px}.gp-selected-head{align-items:flex-start;gap:5px;flex-direction:column}.gp-selected-head>span:last-child{font-size:10px}.gp-selected-quote h3{font-size:12px}.gp-selected-quote>p{font-size:11px}.gp-selected-quote dl{margin:11px 0}.gp-selected-quote dl>div{font-size:11px;line-height:1.5;padding:5px 0;gap:5px}.gp-selected-quote .gp-button{font-size:10px;padding:9px;gap:5px}.gp-commitment{font-size:11px;gap:6px;line-height:1.6}.gp-commitment strong{font-size:10px}.gp-decision-panel>.gp-small{font-size:10px;line-height:1.65}.gp-price-policy{margin-top:11px;padding-top:10px}.gp-price-policy h3{font-size:10px}.gp-price-policy>div:first-child{margin-bottom:8px}.gp-price-policy svg{width:13px}.gp-discount-group button{font-size:11px;min-height:30px}.gp-price-policy p{font-size:10px;line-height:1.7}.gp-no-selection{padding:13px;gap:9px;min-height:170px}.gp-no-selection strong{font-size:11px;line-height:1.55}.gp-no-selection p{font-size:11px;line-height:1.75}.gp-year-preview{padding:10px;margin-top:12px;align-self:start}.gp-year-preview>div{align-items:flex-start;flex-direction:column;gap:4px;font-size:10px}.gp-year-preview>div+div{margin-top:10px}.gp-year-preview strong{font-size:17px}.gp-year-preview small{font-size:10px}.gp-settle-button{font-size:10px;line-height:1.5;min-height:43px;margin-top:12px;padding:10px;gap:5px}.gp-settle-button svg{width:15px}.gp-decision-caption{font-size:10px;line-height:1.8}.gp-contract-active-list,.gp-contract-offers{grid-template-columns:1fr}.gp-section-description{font-size:10px;line-height:1.75;margin-top:-6px;margin-bottom:16px}.gp-contract-offer{padding:15px}.gp-contract-offer h3{font-size:13px}.gp-offer-top>span:last-child{font-size:11px}.gp-ledger-row{gap:9px;flex-wrap:wrap;padding:14px 0}.gp-project-stage{width:29px;height:29px;border-radius:6px}.gp-project-stage svg{width:17px}.gp-ledger-main{flex-basis:calc(100% - 38px)}.gp-ledger-title h3{font-size:11px}.gp-ledger-title{gap:6px}.gp-ledger-title .gp-status{font-size:10px}.gp-ledger-meta{gap:8px;font-size:10px}.gp-ledger-meta .gp-fuel{font-size:7px}.gp-ledger-note{font-size:11px}.gp-ledger-actions{margin-left:38px;flex-direction:row;max-width:none;gap:5px;flex-wrap:wrap}.gp-ledger-actions .gp-button{font-size:11px;padding:6px 8px}.gp-empty-horizontal{gap:12px;padding:8px 0}.gp-empty strong{font-size:11px;line-height:1.5}.gp-empty p{font-size:10px;line-height:1.7}.gp-chart-empty p{font-size:10px}.gp-forecast-grid{grid-template-columns:1fr 1fr;gap:16px}.gp-forecast-grid>div:nth-child(3){border-left:0;padding-left:0}.gp-forecast-grid>div:nth-child(n+3){padding-top:12px;border-top:1px solid #263e4d}.gp-page-footer{flex-direction:column;padding:20px 17px 25px;gap:5px;font-size:10px}.gp-toast{bottom:17px;padding:13px 12px;font-size:11px;max-width:calc(100vw - 28px);border-radius:8px;gap:8px}.gp-toast button{margin-left:3px}.gp-modal-backdrop{padding:12px;align-items:flex-end}.gp-modal{max-height:calc(100dvh - 24px);border-radius:13px}.gp-modal-head{padding:18px 18px 16px;gap:12px}.gp-modal-head h2{font-size:20px}.gp-modal-head .gp-eyebrow{font-size:10px}.gp-modal-body{padding:19px 18px}.gp-modal-foot{padding:15px 18px;gap:11px;flex-wrap:wrap}.gp-modal-foot>.gp-small{font-size:11px;flex:1;min-width:130px}.gp-modal-foot .gp-button{font-size:11px}.gp-report-stats{grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px}.gp-report-stats .gp-stat:last-child{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;gap:0 15px;padding:13px 15px}.gp-report-stats .gp-stat:last-child .gp-stat-label{grid-column:1;grid-row:1}.gp-report-stats .gp-stat:last-child .gp-stat-label svg{display:none}.gp-report-stats .gp-stat:last-child .gp-stat-value{grid-column:2;grid-row:1/3;margin:0;align-self:center}.gp-report-stats .gp-stat:last-child p{grid-column:1;grid-row:2;margin-top:6px}.gp-report-stats .gp-stat{padding:14px}.gp-report-stats .gp-stat-value{font-size:26px}.gp-report-grid{grid-template-columns:1fr;gap:0}.gp-report-section{margin-bottom:24px}.gp-report-section h3{font-size:13px;margin-bottom:14px}.gp-allocation-legend{gap:13px}.gp-allocation-legend>span,.gp-allocation-legend strong{font-size:11px}.gp-finance-table>div{font-size:11px}.gp-finance-table strong{font-size:12px}.gp-finance-total strong{font-size:17px}.gp-bridge-row{grid-template-columns:95px 1fr 50px}.gp-source-comparison p{font-size:11px}.gp-explanation-list li{font-size:10px}.gp-contract-result{font-size:11px;gap:7px 12px}.gp-contract-result strong{width:100%}.gp-evidence .gp-intro-note{font-size:12px;line-height:1.9}.gp-evidence h3{font-size:14px}.gp-evidence p{font-size:11px}.gp-evidence article p+p{font-size:10px}.gp-definition-list>div{grid-template-columns:80px 1fr;gap:12px;font-size:10px}.gp-note{font-size:10px;padding:12px}.gp-setup-grid{padding:24px 17px 36px;gap:22px}.gp-setup-story>.gp-eyebrow{font-size:10px;letter-spacing:1.2px;margin-bottom:15px}.gp-setup-story h1{font-size:29px;letter-spacing:-1.5px;line-height:1.55}.gp-setup-lead{font-size:11px;line-height:1.9;margin-top:14px}.gp-harbor-art{max-width:320px;margin-top:5px;margin-bottom:0}.gp-setup-panel{padding:20px 17px;border-radius:11px}.gp-setup-panel .gp-section-heading{margin-bottom:20px;align-items:center;gap:7px}.gp-setup-panel .gp-section-heading h2{font-size:19px}.gp-setup-panel .gp-tag{font-size:10px}.gp-choice-group{margin-bottom:19px}.gp-choice-group legend{font-size:10px;margin-bottom:9px}.gp-choice-grid{gap:7px}.gp-choice{padding:12px 9px;gap:8px}.gp-choice-top{align-items:flex-start;gap:4px}.gp-choice-top strong{font-size:10px;line-height:1.55}.gp-radio-mark{width:12px;height:12px;margin-top:2px}.gp-radio-mark svg{width:10px;height:10px}.gp-choice>span:last-child{font-size:10px;line-height:1.9}.gp-choice-compact .gp-choice{padding:10px 9px;gap:6px}.gp-setup-detail{grid-template-columns:58px 95px 1fr;font-size:11px;gap:8px;padding-top:13px;margin-bottom:17px}.gp-setup-detail label,.gp-setup-detail input{font-size:11px}.gp-setup-detail span{font-size:10px}.gp-start-button{font-size:11px;min-height:43px}.gp-setup-footnote{font-size:10px;line-height:1.9}.gp-summary{padding:26px 17px 40px}.gp-summary-hero{padding:22px 4px 27px}.gp-summary h1{font-size:25px;letter-spacing:-.9px}.gp-summary-hero>p{font-size:11px;line-height:1.85}.gp-summary-score>strong{font-size:67px}.gp-summary-score>span{font-size:20px}.gp-summary-actions .gp-button{font-size:11px}.gp-summary-stats{grid-template-columns:1fr;gap:10px;margin-top:7px;margin-bottom:20px}.gp-summary-stats .gp-stat{display:grid;grid-template-columns:1fr auto;gap:7px 15px;padding:15px}.gp-summary-stats .gp-stat-label{grid-column:1;grid-row:1}.gp-summary-stats .gp-stat-label svg{display:none}.gp-summary-stats .gp-stat-value{grid-column:2;grid-row:1/3;margin:0;align-self:center;font-size:26px}.gp-summary-stats .gp-stat p{grid-column:1;grid-row:2;font-size:11px}.gp-summary-note{padding:18px 0;gap:9px}.gp-summary-note p{font-size:10px}.gp-summary .gp-section-heading>.gp-button{font-size:11px;padding:6px 8px}.gp-summary-icon{width:57px;height:57px;border-radius:17px}.gp-warnings>div{font-size:10px;padding:11px}}@media (max-width:370px){.gp-brand strong{font-size:14px}.gp-brand small{font-size:6px}.gp-brand-icon{width:31px;height:31px}.gp-top-actions .gp-button-outline>span{display:none}.gp-topbar{padding:0 13px}.gp-main{padding:20px 12px 35px}.gp-project-grid{grid-template-columns:1fr}.gp-project-card h3{min-height:0}.gp-project-terms{grid-template-columns:repeat(3,1fr)}.gp-project-terms>div:last-child{grid-column:auto;display:block}.gp-project-terms>div:last-child strong{font-size:17px}.gp-project-terms>div:last-child small{margin-bottom:5px}.gp-service-grid{grid-template-columns:1fr}.gp-service-head{flex-direction:row;align-items:center}.gp-service-foot{flex-direction:row}.gp-choice-grid{gap:5px}.gp-choice{padding:10px 7px}.gp-radio-mark{display:none}.gp-setup-panel{padding:17px 13px}.gp-setup-grid{padding-left:13px;padding-right:13px}.gp-setup-story h1{font-size:26px}.gp-modal-body{padding:17px 14px}.gp-decision-panel{column-gap:11px}.gp-cash-line strong{font-size:20px}}@media (prefers-reduced-motion:reduce){.gp-app *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}.gp-effective-price{display:flex;justify-content:space-between;gap:8px;color:#91adbc;font-size:11px;padding-top:11px;line-height:1.5}.gp-effective-price strong{color:#c1d7df;font-variant-numeric:tabular-nums}.gp-effective-price small{font-weight:400;color:#8eabba;margin-left:3px}.gp-decision-panel{scroll-margin-top:20px}.gp-campaign-failure{display:inline-flex;align-items:center;gap:7px;margin:0 0 18px;padding:8px 12px;border:1px solid #8c5b48;border-radius:6px;background:#4c3025;color:#f5b798;font-size:12px;font-weight:600}.gp-service-foot{flex-wrap:wrap}.gp-service-head{flex-wrap:wrap;row-gap:7px}.gp-evidence-pending{border:1px solid #304654;border-radius:7px;padding:13px 14px;margin:0 0 27px;background:#0d202d}.gp-evidence-pending summary{cursor:pointer;color:#c1d3dd;font-size:12px;font-weight:600}.gp-evidence-pending ul{color:#8faab9;font-size:12px;line-height:1.9;padding-left:18px;margin:13px 0 0}.gp-evidence-pending li+li{margin-top:10px}.gp-summary.is-bankrupt .gp-summary-score>strong{color:#eab188}.gp-summary.is-bankrupt .gp-summary-icon{color:#eab188;border-color:#624838;background:#36281f}.gp-summary.is-bankrupt .gp-summary-hero{background:radial-gradient(ellipse at 50% 45%,#72462e33,transparent 58%)}.pt-game{--pt-navy:#0e2638;--pt-panel:#102c3edb;--pt-ink:#eff8f7;--pt-muted:#a4bec7;--pt-mint:#9ce4c5;--pt-yellow:#f3c96b;--pt-line:#b4e0de27;--pt-sheet:#102b3c;position:relative;isolation:isolate;overflow:hidden;width:100%;height:100vh;height:100dvh;min-height:560px;background:#62bfd1;color:var(--pt-ink);color-scheme:dark;font:400 14px/1.5 Pretendard,Noto Sans KR,Apple SD Gothic Neo,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-synthesis:none;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}:where(.pt-game),:where(.pt-game) *{box-sizing:border-box}:where(.pt-game) button,:where(.pt-game) input,:where(.pt-game) select{font:inherit}:where(.pt-game) button{cursor:pointer;color:inherit;border:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation}:where(.pt-game) button:disabled{cursor:not-allowed;opacity:.48}:where(.pt-game) button:focus-visible,:where(.pt-game) a:focus-visible,:where(.pt-game) summary:focus-visible,:where(.pt-game) input:focus-visible,:where(.pt-game) select:focus-visible{outline:3px solid #fee5a5;outline-offset:3px}:where(.pt-game) button svg{flex-shrink:0}:where(.pt-game) h1,:where(.pt-game) h2,:where(.pt-game) h3,:where(.pt-game) h4,:where(.pt-game) p{margin:0}:where(.pt-game) h1,:where(.pt-game) h2,:where(.pt-game) h3,:where(.pt-game) h4{word-break:keep-all;line-height:1.4}:where(.pt-game) p{word-break:keep-all;line-height:1.7}:where(.pt-game) em{font-style:normal}:where(.pt-game) summary{cursor:pointer;touch-action:manipulation}:where(.pt-game) ul{padding-left:20px}:where(.pt-game) strong,:where(.pt-game) b{font-weight:700}.pt-game .pt-file-input{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}.pt-game .pt-scene-layer{position:absolute;inset:0;z-index:0}.pt-game .hs-scene-note{display:none}.pt-game .pt-scene-vignette{position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(180deg,#09233362 0,transparent 21%,transparent 74%,#0d3b5359 100%)}.pt-game .pt-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:43px;border:1px solid #8bb8c342;background:#244355;color:#e4f3f5;padding:10px 16px;border-radius:10px;font-size:13px;font-weight:650;line-height:1.5;transition:background .15s,transform .15s,border-color .15s;text-decoration:none}.pt-game .pt-button:hover:not(:disabled){background:#305469;border-color:#aad0d66b}.pt-game .pt-button:active:not(:disabled){transform:translateY(1px)}.pt-game .pt-button-primary{background:var(--pt-mint);border-color:#bcefd7;color:#14372e;box-shadow:0 3px #307e684d}.pt-game .pt-button-primary:hover:not(:disabled){background:#b9efd5;border-color:#d7fbe8}.pt-game .pt-button-quiet{background:transparent;border-color:transparent;color:#bad1d8;box-shadow:none}.pt-game .pt-button-quiet:hover:not(:disabled){background:#3b637032;border-color:transparent}.pt-game .pt-icon-button{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;flex-shrink:0;border:1px solid #b7d9dc28;border-radius:11px;background:#54748220;color:#c7dfe3}.pt-game .pt-icon-button:hover{background:#648b9a38;color:#fff}.pt-game .pt-text-link{display:inline-flex;gap:7px;align-items:center;min-height:40px;background:transparent;color:#b2e9d3;font-size:12px;padding:4px 7px}.pt-game .pt-eyebrow{display:block;color:#9bd5c7;font-size:10px;font-weight:700;line-height:1.5;letter-spacing:1.1px;margin-bottom:5px}.pt-game .pt-negative{color:#ffc1a6!important}.pt-game .pt-good{color:#a8e9ce}.pt-game .pt-warning-text{color:#eccc95}.pt-game .pt-fineprint{font-size:11px;line-height:1.75;color:#a0b9c3;margin-top:18px}.pt-game .pt-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:32px 20px;border:1px dashed #7096a344;border-radius:12px;color:#a7c1ca;font-size:13px;margin-top:15px}.pt-game .pt-empty>svg{color:#80baa9}.pt-game .pt-empty h3{font-size:16px;color:#d7eae9}.pt-game .pt-empty p{max-width:460px;font-size:12px}.pt-game .pt-fuel{display:inline-flex;align-items:center;gap:5px;border:1px solid #99bec137;background:#43687829;padding:3px 8px;border-radius:5px;white-space:nowrap;font-size:10px;line-height:1.5;font-weight:650;color:#bfd4da}.pt-game .pt-fuel:before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor}.pt-game .pt-fuel-methanol{color:#ace4cc;background:#49856b24;border-color:#82caa745}.pt-game .pt-fuel-ammonia{color:#d3c5ee;background:#7f659c2b;border-color:#baa3dd45}.pt-game .pt-fuel-both{color:#d8cdec}.pt-game .pt-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.pt-game .pt-card-head>span:last-child{font-size:11px}.pt-game .pt-hud{position:absolute;z-index:10;top:22px;left:25px;right:25px;display:flex;align-items:center;justify-content:space-between;gap:20px;pointer-events:none}.pt-game .pt-hud>*{pointer-events:auto}.pt-game .pt-brand{display:flex;align-items:center;gap:10px;text-shadow:0 1px 6px #07364245}.pt-game .pt-brand>span{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;color:#f7f3d2;background:#13384ee6;border:1px solid #c4e0d844;box-shadow:0 4px 13px #163b4c2e}.pt-game .pt-brand strong{font-size:17px;letter-spacing:1.2px;color:#fff8e9;line-height:1.3}.pt-game .pt-brand strong small{display:inline-block;vertical-align:middle;font-size:9px;letter-spacing:0;background:#123648c2;border:1px solid #cee3cf33;padding:1px 5px;border-radius:4px;margin-left:4px;color:#acd4ce}.pt-game .pt-brand p{font-size:8px;letter-spacing:2.5px;color:#d0f0ed;line-height:1.5;margin-top:2px}.pt-game .pt-hud-resources{display:flex;position:absolute;left:50%;transform:translate(-50%);align-items:stretch;background:#112d40e8;border:1px solid #c1dfdc42;border-radius:14px;box-shadow:0 6px 20px #0b344335;backdrop-filter:blur(12px)}.pt-game .pt-cash{background:transparent;display:flex;align-items:center;gap:11px;text-align:left;padding:10px 21px 10px 16px;min-width:164px;color:#f3d590}.pt-game .pt-cash>span>small,.pt-game .pt-hud-year>small{display:block;color:#a8c8cd;font-size:9px;font-weight:500;line-height:1.4;letter-spacing:.1px}.pt-game .pt-cash strong{font-size:22px;line-height:1.25;color:#fff1c2;font-variant-numeric:tabular-nums}.pt-game .pt-cash strong em,.pt-game .pt-hud-year strong em{font-size:11px;font-weight:450;margin-left:4px;color:#bfd7d9}.pt-game .pt-hud-year{border-left:1px solid #bdddd024;padding:9px 19px 10px;position:relative;min-width:123px}.pt-game .pt-hud-year strong{display:block;font-size:22px;line-height:1.25;color:#f4f7e9;letter-spacing:.5px}.pt-game .pt-hud-year>span{position:absolute;right:12px;top:10px;color:#85aeb9;font-size:8px}.pt-game .pt-hud-right{display:flex;align-items:center;gap:8px}.pt-game .pt-stage-button{display:flex;align-items:center;gap:7px;padding:10px 13px;border-radius:11px;border:1px solid #d1e5cf35;background:#12344bd9;color:#d7e8ce;min-height:43px;font-size:11px;box-shadow:0 4px 15px #17414a20;backdrop-filter:blur(8px)}.pt-game .pt-stage-button>svg{color:#f0d090}.pt-game .pt-hud-menu{width:44px;height:44px;border:1px solid #d1e5cf3b;border-radius:12px;background:#13384ee6;color:#e3f0e9;display:grid;place-items:center;box-shadow:0 4px 15px #17414a20}.pt-game .pt-stage-button:hover:not(:disabled),.pt-game .pt-hud-menu:hover:not(:disabled){background:#244c60}.pt-game .pt-welcome{position:absolute;z-index:15;top:50%;transform:translateY(-45%);left:5.5%;width:395px;max-width:calc(100% - 36px);max-height:calc(100% - 125px);overflow:auto;padding:29px 28px 22px;background:linear-gradient(145deg,#132e40f2,#0d2b3de8);border:1px solid #d9e5ca4d;border-radius:21px;box-shadow:0 20px 70px #123a4b55,inset 0 1px #e2efd711;backdrop-filter:blur(16px);scrollbar-width:thin;scrollbar-color:#638b8e55 transparent}.pt-game .pt-welcome-kicker{display:flex;align-items:center;gap:7px;color:#a7d2bf;font-size:8px;letter-spacing:1.5px;font-weight:700}.pt-game .pt-welcome-kicker>i{width:5px;height:5px;background:#a4e5c4;border-radius:50%;box-shadow:0 0 9px #a4e5c477}.pt-game .pt-welcome h1{font-size:28px;letter-spacing:-1px;line-height:1.5;margin:15px 0 11px;color:#f4f7eb;font-weight:650}.pt-game .pt-welcome h1 em{color:#b5e7c8}.pt-game .pt-welcome>p{font-size:12px;color:#b4cdd2;line-height:1.85}.pt-game .pt-start-scenarios{display:grid;gap:7px;margin:22px 0 15px}.pt-game .pt-start-scenarios>button{display:flex;align-items:center;gap:10px;text-align:left;background:#6d8c9920;border:1px solid #7eabb233;border-radius:9px;padding:10px 11px;min-height:60px;transition:background .15s,border-color .15s}.pt-game .pt-start-scenarios>button:hover{background:#6eaca032}.pt-game .pt-start-scenarios>button.is-selected{background:#6aa78825;border-color:#9ad0b37d}.pt-game .pt-scenario-number{font-size:10px;color:#87aaac;width:21px;flex-shrink:0}.pt-game .pt-start-scenarios>button>span:nth-child(2){flex:1}.pt-game .pt-start-scenarios strong{display:block;font-size:12px;color:#edf4e7;margin-bottom:3px}.pt-game .pt-start-scenarios small{display:block;font-size:10px;line-height:1.6;color:#a9c3ca;word-break:keep-all}.pt-game .pt-start-scenarios>button>i{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;font-style:normal;color:#92b2b3}.pt-game .pt-start-scenarios>button.is-selected>i{color:#123a30;background:#a7ddbd}.pt-game .pt-start-settings{margin-bottom:17px;border-bottom:1px solid #b7d1cc24;padding-bottom:12px}.pt-game .pt-start-settings>summary{font-size:11px;min-height:30px;padding:5px 0;color:#c4d9d8;line-height:1.7}.pt-game .pt-start-settings>summary>span{float:right;color:#91b9aa;font-size:10px}.pt-game .pt-start-settings>div{display:grid;grid-template-columns:1fr 1fr;gap:12px 10px;padding-top:12px}.pt-game .pt-start-settings label{display:flex;flex-direction:column;gap:5px;font-size:10px;color:#adc5ca}.pt-game .pt-start-settings label:last-child{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;align-items:center}.pt-game .pt-start-settings select,.pt-game .pt-start-settings input{min-width:0;width:100%;padding:9px;background:#17394a;color:#edf7f3;border:1px solid #5a879249;border-radius:6px;font-size:11px}.pt-game .pt-start-button{width:100%;min-height:47px;font-size:13px;justify-content:center}.pt-game .pt-welcome-links{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin:9px 0 4px}.pt-game .pt-welcome-links>button{background:transparent;font-size:10px;color:#acc8ca;min-height:32px;padding:5px 6px}.pt-game .pt-welcome-links>button:hover{color:#e7f4ea;text-decoration:underline}.pt-game .pt-welcome-note{display:block;color:#7fa1aa;text-align:center;font-size:9px;line-height:1.6;margin-top:7px}.pt-game .pt-field-message{position:absolute;z-index:5;top:108px;left:26px;width:330px;display:flex;align-items:flex-start;gap:12px;padding:15px 17px 13px 12px;border-radius:15px;background:#16384de8;border:1px solid #e2e9d248;box-shadow:0 8px 27px #17414c32;backdrop-filter:blur(14px)}.pt-game .pt-field-message:after{content:"";position:absolute;left:34px;bottom:-7px;width:12px;height:12px;transform:rotate(45deg);background:#16384d;border-right:1px solid #e2e9d248;border-bottom:1px solid #e2e9d248}.pt-game .pt-advisor-avatar{width:43px;height:47px;flex-shrink:0;display:grid;place-items:end center;background:#9cbf9c;border:2px solid #dbdcb382;overflow:hidden;border-radius:13px}.pt-game .pt-field-message>div:last-child{flex:1;min-width:0}.pt-game .pt-field-message>div>span{display:block;color:#aecbd0;font-size:9px;margin:1px 0 5px}.pt-game .pt-field-message>div>span>i{font-style:normal;margin-left:5px;color:#dfc68d;font-size:8px}.pt-game .pt-field-message h2{font-size:13px;line-height:1.5;letter-spacing:-.25px;color:#f5f3df;margin-bottom:5px}.pt-game .pt-field-message p{font-size:11px;line-height:1.75;color:#b3cdd1;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.pt-game .pt-field-message button{display:flex;align-items:center;gap:6px;background:transparent;color:#b6e8cb;padding:6px 0 2px;min-height:32px;font-size:11px;font-weight:650}.pt-game .pt-field-message button:hover{color:#fff7c4}.pt-game .pt-side-tools{position:absolute;right:26px;top:108px;z-index:6;display:flex;gap:8px;align-items:center}.pt-game .pt-side-tools>button{display:flex;align-items:center;justify-content:center;gap:7px;min-height:43px;padding:9px 13px;background:#14384cdb;border:1px solid #d4e6cf46;border-radius:10px;color:#e0ece4;box-shadow:0 4px 14px #143e4b30;font-size:11px;backdrop-filter:blur(8px)}.pt-game .pt-side-tools>button:hover{background:#244d62}.pt-game .pt-project-count strong{color:#ffdb87;margin-left:4px}.pt-game .pt-first-hint{display:flex;align-items:center;gap:8px;position:absolute;z-index:5;left:50%;bottom:167px;transform:translate(-50%);white-space:nowrap;color:#eff7dd;background:#14394bd4;border:1px solid #dbe5c82e;border-radius:40px;padding:7px 8px 7px 13px;backdrop-filter:blur(8px);font-size:11px}.pt-game .pt-first-hint>svg{color:#e4cd8e}.pt-game .pt-first-hint>button{width:28px;height:28px;background:transparent;color:#adc5c6;border-radius:50%;display:grid;place-items:center}.pt-game .pt-next-milestone{position:absolute;bottom:118px;left:26px;z-index:5;display:flex;align-items:center;gap:8px;background:#153a4ccf;border:1px solid #dbdfbf3a;padding:9px 12px;border-radius:10px;box-shadow:0 4px 16px #13415230;max-width:275px}.pt-game .pt-next-milestone>svg:first-child{color:#e7ce86}.pt-game .pt-next-milestone>span{font-size:8px;line-height:1.5;color:#a8c7c6;text-align:left}.pt-game .pt-next-milestone strong{display:block;font-size:11px;color:#e7f0db;font-weight:600;margin-top:2px}.pt-game .pt-next-milestone>svg:last-child{color:#aac6bd}.pt-game .pt-map-caption{position:absolute;z-index:4;bottom:12px;left:50%;transform:translate(-50%);color:#d3ebe6;font-size:8px;letter-spacing:.25px;white-space:nowrap;text-shadow:0 1px 5px #123a51}.pt-game .pt-dock{position:absolute;z-index:15;left:50%;bottom:32px;transform:translate(-50%);display:flex;gap:9px;align-items:stretch;filter:drop-shadow(0 7px 15px #0a354842)}.pt-game .pt-dock-tools{display:flex;align-items:center;gap:3px;padding:6px 8px;background:#102d41f0;border:1px solid #d9e7d14d;border-radius:16px;backdrop-filter:blur(16px)}.pt-game .pt-dock-tools>button{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5px;position:relative;min-width:73px;min-height:60px;background:transparent;border-radius:11px;color:#b9d4d8;font-size:10px;transition:background .15s,color .15s}.pt-game .pt-dock-tools>button:hover:not(:disabled){background:#548c9230;color:#eff9df}.pt-game .pt-dock-tools>button.is-active{color:#dcf2c9;background:#527a5c49}.pt-game .pt-dock-tools>button.is-active:after{content:"";position:absolute;bottom:-7px;height:3px;width:23px;border-radius:3px;background:#b5e6c2}.pt-game .pt-dock-tools>button>i{position:absolute;right:13px;top:3px;display:grid;place-items:center;width:15px;height:15px;border:2px solid #16364a;border-radius:50%;color:#183535;background:#f1ce82;font-size:8px;line-height:1;font-style:normal;font-weight:800}.pt-game .pt-operate-button{display:flex;align-items:center;justify-content:space-between;gap:21px;min-width:198px;padding:13px 18px 13px 20px;color:#253b31;background:linear-gradient(135deg,#f6da94,#eec372);border:1px solid #ffe8b3;border-radius:15px;box-shadow:inset 0 1px #fff6d9,0 3px #7761394a;text-align:left;transition:filter .15s,transform .15s}.pt-game .pt-operate-button:hover:not(:disabled){filter:brightness(1.06);transform:translateY(-1px)}.pt-game .pt-operate-button small{display:block;font-size:9px;color:#75643e;margin-bottom:3px}.pt-game .pt-operate-button strong{display:block;font-size:15px;font-weight:800;letter-spacing:-.2px}.pt-game .pt-operate-button>svg{fill:#324933;stroke:#324933;width:17px}.pt-game .pt-sheet{position:absolute;z-index:20;bottom:119px;left:50%;transform:translate(-50%);width:min(860px,calc(100% - 48px));max-height:min(66%,640px);display:flex;flex-direction:column;border:1px solid #b8d7d15e;border-radius:19px;background:linear-gradient(135deg,#153548fa,#0f293bfa);box-shadow:0 20px 65px #08263760;backdrop-filter:blur(20px);animation:ptSheetIn .22s ease-out;overflow:hidden}.pt-game .pt-sheet-wide{width:min(1050px,calc(100% - 48px))}.pt-game .pt-sheet-handle{width:37px;height:3px;border-radius:3px;background:#9bbfc156;margin:9px auto 0;flex-shrink:0}.pt-game .pt-sheet-head{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:12px 24px 16px;border-bottom:1px solid #98bec327;flex-shrink:0}.pt-game .pt-sheet-head h2{font-size:20px;font-weight:650;letter-spacing:-.55px;color:#f1f5e9}.pt-game .pt-sheet-head .pt-eyebrow{font-size:9px;letter-spacing:1px;margin-bottom:4px}.pt-game .pt-sheet-body{padding:21px 24px 25px;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#6c8f9855 transparent}.pt-game .pt-panel-intro{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:16px}.pt-game .pt-panel-intro>p,.pt-game .pt-panel-copy{font-size:12px;color:#b0c9ce;line-height:1.8}.pt-game .pt-panel-copy{margin-bottom:18px}.pt-game .pt-tabs{display:flex;gap:7px;border-bottom:1px solid #a2c4c12d;padding-bottom:14px;margin-bottom:12px}.pt-game .pt-tabs>button{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;min-height:42px;padding:9px 12px;border-radius:9px;background:#5d89991a;color:#9fbfc9;font-size:12px;font-weight:600;border:1px solid transparent;white-space:nowrap}.pt-game .pt-tabs>button[aria-selected=true]{color:#d3ecd6;border-color:#a3c59f72;background:#5e89663b}.pt-game .pt-tabs>button:hover{color:#e7f4ea;background:#5d899930}.pt-game .pt-build-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:15px}.pt-game .pt-filters{display:flex;align-items:center;gap:4px}.pt-game .pt-filters>button{min-height:34px;padding:5px 10px;font-size:11px;border-radius:7px;background:transparent;color:#99b7c3}.pt-game .pt-filters>button[aria-pressed=true]{background:#8bb5b223;color:#d5e8df}.pt-game .pt-actions-left{margin-left:auto;font-size:10px;color:#9bb6c1}.pt-game .pt-actions-left strong{color:#e8d699;font-size:12px;margin-left:4px}.pt-game .pt-build-layout{display:grid;gap:16px}.pt-game .pt-build-layout.has-quote{grid-template-columns:minmax(0,1fr) 242px}.pt-game .pt-project-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start}.pt-game .pt-project-option{display:flex;flex-direction:column;align-items:stretch;gap:0;text-align:left;padding:17px 17px 13px;background:#203f5099;border:1px solid #759baa44;border-radius:12px;transition:border-color .15s,background .15s;min-height:205px}.pt-game .pt-project-option:hover{border-color:#afcbb580;background:#294c5c}.pt-game .pt-project-option.is-selected{background:#2e514bd1;border-color:#aedbb2;box-shadow:inset 0 0 0 1px #a4d4b52b}.pt-game .pt-project-option.is-locked{background:#2037476b}.pt-game .pt-project-option.is-locked h3{color:#afc2c9}.pt-game .pt-project-option>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-bottom:11px}.pt-game .pt-cost{font-size:19px;font-weight:700;color:#f2d499;font-variant-numeric:tabular-nums;line-height:1}.pt-game .pt-cost small{font-size:10px;font-weight:400;margin-left:3px;color:#b6c5bd}.pt-game .pt-project-option h3{font-size:14px;color:#eef2e4;line-height:1.55;letter-spacing:-.3px;margin-bottom:8px}.pt-game .pt-project-option>p{font-size:11px;line-height:1.75;color:#abc3cd;margin-bottom:12px}.pt-game .pt-project-effect{padding:8px 10px;background:#0f2d354d;border-radius:6px;font-size:11px;color:#b3dbc7;line-height:1.65;margin-top:auto;word-break:keep-all}.pt-game .pt-project-option footer{display:flex;justify-content:space-between;align-items:center;gap:7px;padding-top:11px;font-size:10px;color:#afc5ca;line-height:1.5}.pt-game .pt-project-option footer>span:first-child{display:flex;align-items:center;gap:4px;color:#d2dfce}.pt-game .pt-option-reason{font-size:10px;line-height:1.7;color:#c5b59a;margin-top:10px;border-top:1px solid #a5b6b527;padding-top:8px}.pt-game .pt-quote{align-self:start;position:sticky;top:0;border:1px solid #adcfac69;border-radius:12px;background:#183c3df0;padding:19px 17px;box-shadow:inset 0 1px #cce6b511}.pt-game .pt-quote h3{font-size:16px;line-height:1.55;color:#e6efcf;letter-spacing:-.4px;margin:8px 0}.pt-game .pt-quote>p{font-size:11px;color:#b5d4be;line-height:1.8}.pt-game .pt-quote dl{margin:19px 0}.pt-game .pt-quote dl>div{display:flex;justify-content:space-between;gap:8px;font-size:11px;line-height:1.6;padding:8px 0;border-bottom:1px solid #abd4be20}.pt-game .pt-quote dt{color:#a3c4c0}.pt-game .pt-quote dd{margin:0;font-size:12px;color:#edf3d8;font-weight:650;text-align:right}.pt-game .pt-quote .pt-button{width:100%}.pt-game .pt-quote>small{display:block;color:#a0bbb3;font-size:10px;line-height:1.8;margin-top:12px}.pt-game .pt-inline-warning{color:#e7c599!important;margin-top:10px;font-size:11px}.pt-game .pt-pipeline{display:grid;gap:10px}.pt-game .pt-project-row{display:flex;align-items:center;gap:15px;background:#28475844;border:1px solid #85acb02b;border-radius:11px;padding:16px}.pt-game .pt-project-row.is-focused{border-color:#9ccfad99;background:#49765f22}.pt-game .pt-phase-icon{display:grid;place-items:center;flex-shrink:0;width:45px;height:49px;border-radius:11px;background:#a5843c24;border:1px solid #cdb57532;color:#dec68e}.pt-game .pt-phase-operating{background:#48866b32;border-color:#8ac89b36;color:#b0dec2}.pt-game .pt-project-row-main{min-width:0;flex:1}.pt-game .pt-project-row-main>div{display:flex;align-items:center;gap:7px}.pt-game .pt-status{display:inline-block;color:#ceb98c;font-size:10px;font-weight:600}.pt-game .pt-status-operating,.pt-game .pt-status-completed{color:#ade1c5}.pt-game .pt-status-active{color:#9fcbdc}.pt-game .pt-status-failed{color:#e5b294}.pt-game .pt-project-row h3{font-size:14px;line-height:1.5;margin-top:5px;color:#e6eee0}.pt-game .pt-project-row p{font-size:11px;line-height:1.7;margin-top:4px;color:#9bb8c3}.pt-game .pt-project-row p span{color:#78a398;margin:0 3px}.pt-game .pt-project-row p strong{color:#bed2c9;font-weight:550}.pt-game .pt-project-row small{display:block;font-size:10px;line-height:1.7;color:#d7ba8e;margin-top:5px}.pt-game .pt-project-row-actions{display:flex;flex-direction:column;gap:5px;min-width:133px}.pt-game .pt-project-row-actions>.pt-button{font-size:11px;min-height:36px;padding:7px 11px}.pt-game .pt-year-news{display:grid;grid-template-columns:minmax(0,1fr) 230px;gap:16px 23px;margin-bottom:18px;padding:17px 18px;border:1px solid #a5c3b73f;border-radius:12px;background:#678d7e19}.pt-game .pt-news-main{display:flex;gap:12px;align-items:flex-start}.pt-game .pt-news-main>svg{flex-shrink:0;color:#cec38e;margin-top:3px}.pt-game .pt-news-main h3{font-size:15px;color:#e5e9d2;letter-spacing:-.3px;margin-bottom:6px}.pt-game .pt-news-main p{font-size:11px;color:#b0c7c9;line-height:1.8}.pt-game .pt-news-effects{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.pt-game .pt-news-effects>span{font-size:10px;line-height:1.7;color:#bdd9bc;padding:4px 7px;border-radius:5px;background:#7eab8724}.pt-game .pt-news-market{align-self:center;border-left:1px solid #a0c2bb2b;padding-left:20px}.pt-game .pt-news-market>span{display:block;font-size:10px;color:#afc9cb;margin-bottom:11px}.pt-game .pt-news-market>span>small{font-size:8px;color:#829fa9;margin-left:5px}.pt-game .pt-news-market>div{display:flex;gap:17px}.pt-game .pt-news-market>div>span{flex:1}.pt-game .pt-news-market strong{display:block;font-size:20px;color:#d6e5d3;line-height:1.5;font-variant-numeric:tabular-nums;margin-top:5px}.pt-game .pt-news-market strong>small{font-size:9px;font-weight:400;margin-left:4px;color:#9fbab9}.pt-game .pt-news-warnings{grid-column:1/-1;margin:0;padding:12px 10px 0 17px;border-top:1px solid #cfb68c35;font-size:11px;color:#dfc098;line-height:1.8}.pt-game .pt-news-warnings>li+li{margin-top:5px}.pt-game .pt-operations-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:18px}.pt-game .pt-operation-card{border-radius:12px;background:#2a4c542f;border:1px solid #88b79e45;padding:19px}.pt-game .pt-operation-ammonia{background:#51446424;border-color:#ab9fc246}.pt-game .pt-operation-card h3{font-size:16px;margin:14px 0 18px;color:#e0eadb;letter-spacing:-.35px}.pt-game .pt-service-numbers{display:flex;align-items:stretch;gap:16px;margin:12px 0 15px}.pt-game .pt-service-numbers>span{flex:1;min-width:0}.pt-game .pt-service-numbers>span+span{padding-left:16px;border-left:1px solid #92b6bd33}.pt-game .pt-service-numbers strong{font-size:25px;line-height:1.3;color:#d3e7dd;font-weight:650;letter-spacing:-1px;font-variant-numeric:tabular-nums;display:block}.pt-game .pt-service-numbers small{display:block;font-size:10px;color:#97b8c1;line-height:1.6;margin-top:4px}.pt-game .pt-operation-card>p{font-size:11px;color:#a7c1c9;margin-bottom:17px}.pt-game .pt-inline-actions{display:flex;gap:6px;flex-wrap:wrap}.pt-game .pt-inline-actions .pt-button{font-size:11px;padding:8px 11px;min-height:36px}.pt-game .pt-price-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.8fr);gap:28px;padding:20px;border-radius:12px;border:1px solid #a3bca33d;background:#2d514e23}.pt-game .pt-price-card h3{font-size:15px;color:#e7e8cc;margin-bottom:8px;letter-spacing:-.25px}.pt-game .pt-price-card p{font-size:11px;color:#a6bec4;line-height:1.8}.pt-game .pt-price-buttons{display:flex;gap:5px;margin-bottom:12px}.pt-game .pt-price-buttons>button{flex:1;min-height:40px;border-radius:8px;border:1px solid #759ca045;background:#26445166;color:#a8c1ca;font-size:13px;font-weight:600}.pt-game .pt-price-buttons>button[aria-pressed=true]{background:#7c9b6839;border-color:#b1ca8d85;color:#e5e6b5}.pt-game .pt-price-preview{display:flex;justify-content:space-between;gap:15px;font-size:10px;color:#9fb9c0}.pt-game .pt-price-preview strong{display:block;font-size:15px;color:#d4e3d3;margin-top:3px}.pt-game .pt-mini-issues{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}.pt-game .pt-mini-issues>article{display:flex;align-items:flex-start;gap:9px;padding:13px 11px;border-radius:8px;background:#56757f13}.pt-game .pt-mini-issues svg{flex-shrink:0;color:#c4ad7f;margin-top:2px}.pt-game .pt-mini-issues strong{font-size:11px;color:#d1d9c7;line-height:1.5}.pt-game .pt-mini-issues p{font-size:10px;line-height:1.75;color:#9ebac4;margin-top:4px}.pt-game .pt-request-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px}.pt-game .pt-request-grid:has(>.pt-request-card:only-child){grid-template-columns:1fr}.pt-game .pt-request-card{border:1px solid #b0c4ac47;border-radius:13px;background:linear-gradient(135deg,#3c52523a,#263c4933);padding:19px}.pt-game .pt-request-card>header{display:flex;align-items:center;gap:11px}.pt-game .pt-person-avatar{width:45px;height:45px;display:grid;place-items:center;background:#ad987738;border:1px solid #dcc59840;color:#e2c994;border-radius:12px;flex-shrink:0}.pt-game .pt-request-card>header>div{flex:1}.pt-game .pt-request-card>header>div>span{display:block;font-size:9px;color:#a9bbb9;margin-bottom:3px}.pt-game .pt-request-card h3{font-size:15px;color:#eae8d1;letter-spacing:-.3px}.pt-game .pt-request-card blockquote{font-size:16px;line-height:1.85;word-break:keep-all;letter-spacing:-.3px;margin:21px 0;padding:0 0 0 15px;color:#dbe5d3;border-left:3px solid #c4ba8370}.pt-game .pt-request-terms{display:flex;gap:12px;margin:17px 0}.pt-game .pt-request-terms>span{flex:1}.pt-game .pt-request-terms small{display:block;font-size:10px;color:#91b1b9;margin-bottom:5px}.pt-game .pt-request-terms strong{display:block;font-size:12px;color:#d9dfca;font-weight:650}.pt-game .pt-request-card details,.pt-game .pt-current-contracts details{border-top:1px solid #a1bcb72a;padding-top:12px;margin-top:15px}.pt-game .pt-request-card summary,.pt-game .pt-current-contracts summary{font-size:11px;color:#c4d3cb;min-height:30px}.pt-game .pt-request-card li,.pt-game .pt-current-contracts li{font-size:11px;line-height:1.8;color:#a3bbc4;margin-top:5px}.pt-game .pt-request-card footer{display:flex;justify-content:flex-end;gap:7px;margin-top:13px}.pt-game .pt-current-contracts{margin-top:24px}.pt-game .pt-current-contracts>h3{font-size:14px;color:#dbe7d9;margin-bottom:13px}.pt-game .pt-current-contracts>article{background:#39546524;border:1px solid #a2c5c22b;border-radius:10px;padding:16px;margin-top:10px}.pt-game .pt-current-contracts>article>div:first-child{display:flex;align-items:center;gap:9px;margin-bottom:8px}.pt-game .pt-current-contracts h4{font-size:14px;color:#dfeada}.pt-game .pt-current-contracts p{font-size:11px;color:#98b5bf;margin-top:5px}.pt-game .pt-contract-track{height:5px;background:#81979a2b;border-radius:5px;overflow:hidden;margin:14px 0 7px}.pt-game .pt-contract-track>span{display:block;height:100%;background:#a0ccac;border-radius:5px;max-width:100%}.pt-game .pt-contract-facts{display:flex;justify-content:space-between;gap:10px;color:#abc6c3;font-size:10px}.pt-game .pt-rival-tabs{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:21px}.pt-game .pt-rival-tabs>button{padding:8px 15px;min-height:40px;border-radius:8px;background:#3e61752f;border:1px solid #7699a22c;color:#a9c2cd;font-size:12px}.pt-game .pt-rival-tabs>button.is-selected{background:#65875e39;border-color:#bbd29f6b;color:#e1e6bd}.pt-game .pt-rival-detail{display:grid;grid-template-columns:1fr 1fr;gap:27px}.pt-game .pt-rival-detail h3{font-size:27px;letter-spacing:-.7px;margin:8px 0 7px;color:#e7efdf}.pt-game .pt-rival-detail p{font-size:12px;line-height:1.8;color:#9fbdc7}.pt-game .pt-rival-detail h4{font-size:13px;color:#d0ddd4;margin:4px 0 10px}.pt-game .pt-rival-detail ul{margin:0 0 15px}.pt-game .pt-rival-detail li{font-size:12px;color:#b5cdcf;line-height:1.9;margin-bottom:5px}.pt-game .pt-rival-detail .pt-button{margin-top:12px}.pt-game .pt-rival-detail .pt-service-numbers{margin-top:22px}.pt-game .pt-ledger-top{display:grid;grid-template-columns:1.2fr .8fr 1fr;gap:20px;margin:0 0 24px;padding-bottom:21px;border-bottom:1px solid #a5bfc32c}.pt-game .pt-ledger-top>div+div{border-left:1px solid #a5bfc32c;padding-left:22px}.pt-game .pt-ledger-top>div>span{display:block;font-size:11px;color:#9fbcc4;margin-bottom:8px}.pt-game .pt-ledger-top strong{display:block;font-size:34px;color:#d1e9ca;line-height:1.2;letter-spacing:-1px;font-variant-numeric:tabular-nums}.pt-game .pt-ledger-top strong>small{font-size:14px;margin-left:5px}.pt-game .pt-ledger-top>div>small{display:block;font-size:10px;line-height:1.8;color:#9ebbc5;margin-top:9px}.pt-game .pt-ledger-grid{display:grid;grid-template-columns:1fr 1fr;gap:27px}.pt-game .pt-ledger-grid h3{font-size:14px;color:#dce9dc;margin-bottom:14px}.pt-game .pt-ledger-grid .pt-card-head{margin-bottom:8px}.pt-game .pt-ledger-grid .pt-card-head h3{margin-bottom:0}.pt-game .pt-ledger-grid .pt-card-head .pt-button{min-height:33px;font-size:11px;padding:6px 8px}.pt-game .pt-forecast{margin-top:24px;border-top:1px solid #9dbdc027;padding-top:19px}.pt-game .pt-forecast h3{font-size:14px;color:#d6e5da;margin-bottom:15px}.pt-game .pt-forecast h3 small{font-size:10px;color:#93b0bb;font-weight:450;margin-left:7px}.pt-game .pt-forecast>div{display:grid;grid-template-columns:repeat(3,1fr);gap:19px}.pt-game .pt-forecast article{display:grid;grid-template-columns:1fr auto;gap:4px 9px}.pt-game .pt-forecast article>strong{grid-column:1/-1;font-size:13px;color:#c8dcce;margin-bottom:4px}.pt-game .pt-forecast article>span{font-size:10px;color:#92b3bd}.pt-game .pt-forecast article>span>b{color:#d0ddd1;font-size:12px;font-weight:600;margin-left:5px}.pt-game .pt-fuel-bar{grid-column:1/-1;display:flex;height:6px;border-radius:5px;overflow:hidden;margin-top:6px}.pt-game .pt-fuel-bar>i:first-child{background:#94d8b8}.pt-game .pt-fuel-bar>i:last-child{background:#b3a0ce}.pt-game .gp-app.pt-legacy{background:none;min-height:0;font-size:12px;font-family:inherit}.pt-game .gp-app.pt-legacy-overlay{background:none;min-height:0;font-family:inherit}.pt-game .pt-legacy-overlay .gp-modal-backdrop{z-index:55}.pt-game .pt-legacy-overlay .gp-modal{background:#112d3f;border-color:#a5c8c444;box-shadow:0 20px 80px #08273570}.pt-game .pt-legacy-overlay .gp-modal-head{background:#15384a}.pt-game .pt-legacy-overlay .gp-modal-body{background:#112d3f}.pt-game .pt-legacy .gp-chart-empty{min-height:155px}.pt-game .pt-stage-intro{display:flex;align-items:center;gap:18px;padding-bottom:20px;margin-bottom:14px;border-bottom:1px solid #9abbb82b}.pt-game .pt-stage-mark{width:67px;height:67px;border-radius:19px;display:grid;place-items:center;color:#e5d18f;background:#a7965b28;border:1px solid #bfc18b4d;flex-shrink:0}.pt-game .pt-stage-intro h3{font-size:23px;color:#e1e9c9;letter-spacing:-.7px;margin:4px 0}.pt-game .pt-stage-intro p{font-size:12px;color:#a4bfc7}.pt-game .pt-milestone-list{display:grid;gap:9px}.pt-game .pt-milestone-list>article{display:flex;align-items:center;gap:14px;padding:15px;background:#4a6a771c;border:1px solid #8dadb024;border-radius:10px}.pt-game .pt-milestone-list>article>span{width:37px;height:37px;display:grid;place-items:center;border-radius:11px;color:#a0bac2;background:#45616c3b;font-size:12px;flex-shrink:0}.pt-game .pt-milestone-list>article>div{flex:1}.pt-game .pt-milestone-list h3{font-size:13px;color:#c8d9d7;margin-bottom:4px}.pt-game .pt-milestone-list p{font-size:11px;line-height:1.75;color:#98b5c0}.pt-game .pt-milestone-list>article>strong{font-size:10px;font-weight:600;white-space:nowrap;color:#a0b1b0}.pt-game .pt-milestone-list>article.is-complete{border-color:#88c1a43b;background:#57856b20}.pt-game .pt-milestone-list>article.is-complete>span{color:#173d33;background:#a1d1b2}.pt-game .pt-milestone-list>article.is-complete>strong{color:#b9ddad}.pt-game .pt-save-note{display:flex;align-items:center;gap:8px;color:#bbd6b9;font-size:12px;margin-bottom:19px}.pt-game .pt-save-note>i{width:6px;height:6px;border-radius:50%;background:#a8d7a6}.pt-game .pt-office-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.pt-game .pt-office-actions>.pt-button{justify-content:flex-start;padding:13px 16px;min-height:49px}.pt-game .pt-view-settings{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:22px 0;padding:20px 0;border-top:1px solid #9bbbbb26;border-bottom:1px solid #9bbbbb26}.pt-game .pt-view-settings>label{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;cursor:pointer}.pt-game .pt-view-settings>label>span{display:flex;align-items:center;gap:8px;font-size:12px;color:#c5d6d7}.pt-game .pt-view-settings input{width:18px;height:18px;accent-color:#abd7b8}.pt-game .pt-office-help h3{font-size:13px;color:#d8e4d7;margin-bottom:10px}.pt-game .pt-office-help p{font-size:12px;color:#9ab8c3;line-height:1.85}.pt-game .pt-office-help p+p{margin-top:9px}.pt-game .pt-office-help small{display:block;margin-top:18px;color:#829fae;font-size:10px}.pt-game .pt-operation-replay{position:absolute;z-index:21;bottom:36px;left:50%;transform:translate(-50%);width:520px;max-width:calc(100% - 36px);background:#102d40f0;border:1px solid #d4e3cb55;border-radius:18px;padding:21px 23px 18px;box-shadow:0 13px 40px #10384b4d;backdrop-filter:blur(15px)}.pt-game .pt-replay-title{display:flex;align-items:center;gap:12px}.pt-game .pt-live-light{width:9px;height:9px;border-radius:50%;background:#b3e4b7;box-shadow:0 0 15px #c0eb9f66}.pt-game .pt-replay-title>div{flex:1}.pt-game .pt-replay-title small{display:block;font-size:10px;color:#afcbbf;margin-bottom:4px}.pt-game .pt-replay-title strong{display:block;font-size:19px;line-height:1.4;letter-spacing:-.5px;color:#e7f1d7}.pt-game .pt-replay-title>span:last-child{font-size:20px;font-variant-numeric:tabular-nums;color:#d3dfb0;font-weight:650}.pt-game .pt-replay-progress{height:6px;border-radius:5px;overflow:hidden;background:#6581863d;margin:17px 0 9px}.pt-game .pt-replay-progress>i{height:100%;display:block;transition:width .1s linear;border-radius:5px;background:linear-gradient(90deg,#8cd6ba,#e4dd96)}.pt-game .pt-replay-steps{display:flex;justify-content:space-between;color:#6b929d;font-size:9px;margin-bottom:20px}.pt-game .pt-replay-steps>.is-active{color:#b8d2bc}.pt-game .pt-replay-controls{display:flex;align-items:center;gap:12px}.pt-game .pt-replay-controls>button{display:flex;align-items:center;gap:7px;min-height:37px;padding:7px 10px;background:#51737c24;border:1px solid #a5bfbb38;border-radius:8px;font-size:11px;color:#c3d9d1}.pt-game .pt-replay-controls>div{display:flex;gap:2px;align-items:center}.pt-game .pt-replay-controls>div>button{min-width:34px;min-height:35px;border-radius:7px;background:transparent;color:#90b2bc;font-size:11px;font-weight:600}.pt-game .pt-replay-controls>div>button[aria-pressed=true]{color:#d9e6b8;background:#8ba36c32}.pt-game .pt-replay-controls>button:last-child{margin-left:auto;color:#e2d39c;background:#9c84402e;border-color:#c6b77e3f}.pt-game .pt-operation-replay>small{display:block;font-size:9px;color:#9cb7bd;line-height:1.8;margin-top:13px;text-align:center}.pt-game .pt-report-backdrop{position:absolute;inset:0;z-index:45;display:flex;align-items:center;justify-content:center;padding:24px;background:#0d2636a6;backdrop-filter:blur(4px)}.pt-game .pt-result-card{width:650px;max-width:100%;max-height:100%;overflow:auto;padding:31px 31px 24px;background:linear-gradient(140deg,#21483f,#153544 62%);border:1px solid #c9ddb275;border-radius:23px;box-shadow:0 25px 100px #052b3a6b;text-align:center;animation:ptResultIn .3s ease-out;scrollbar-width:thin}.pt-game .pt-result-badge,.pt-game .pt-end-icon{display:grid;place-items:center;width:66px;height:66px;border-radius:20px;background:#5c9a6c35;color:#dce8ae;border:1px solid #cbd6935e;margin:0 auto 21px;box-shadow:inset 0 1px #e9efb62b}.pt-game .pt-result-card>.pt-eyebrow{color:#bdcfaa;font-size:9px;letter-spacing:1.4px;margin-bottom:9px}.pt-game .pt-result-card h2{font-size:25px;line-height:1.5;letter-spacing:-.9px;font-weight:650;color:#edf0d8}.pt-game .pt-result-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:28px 0 21px}.pt-game .pt-result-stats>div{background:#5b847826;border:1px solid #c4d6ad24;border-radius:11px;padding:17px 9px 14px}.pt-game .pt-result-stats>div>span{display:block;font-size:10px;color:#b3c7bc;margin-bottom:7px}.pt-game .pt-result-stats strong{display:block;font-size:29px;color:#e8e7b3;line-height:1.3;font-variant-numeric:tabular-nums;letter-spacing:-.9px}.pt-game .pt-result-stats strong small{font-size:11px;margin-left:4px;font-weight:400;letter-spacing:0;color:#aec8bd}.pt-game .pt-result-stats em{display:block;font-size:9px;line-height:1.7;color:#8eb3ac;margin-top:7px}.pt-game .pt-completion-banner{display:flex;gap:12px;align-items:center;padding:14px 16px;background:#8da36226;border:1px solid #c4d38a3d;border-radius:10px;margin-bottom:16px;text-align:left;color:#ceddaa}.pt-game .pt-completion-banner strong{font-size:12px;color:#deebbc}.pt-game .pt-completion-banner p{font-size:11px;line-height:1.75;color:#b8cbb0;margin-top:4px}.pt-game .pt-completion-banner svg{flex-shrink:0}.pt-game .pt-result-takeaway{font-size:12px;color:#b0c8bf;line-height:1.9;margin:10px 6px 23px}.pt-game .pt-result-card footer{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap}.pt-game .pt-result-card footer .pt-button{min-width:175px}.pt-game .pt-result-card.is-bankrupt{background:linear-gradient(140deg,#524432,#153544 62%);border-color:#d5b88a6b}.pt-game .pt-result-card.is-bankrupt .pt-result-badge{background:#ba8a4533;border-color:#d5b88050;color:#e7ca9c}.pt-game .pt-end-card{position:absolute;z-index:12;left:50%;top:50%;transform:translate(-50%,-48%);width:580px;max-width:calc(100% - 36px);max-height:calc(100% - 220px);overflow:auto;padding:29px;text-align:center;background:#163849ed;border:1px solid #d2deb456;border-radius:22px;box-shadow:0 20px 80px #12384d66;backdrop-filter:blur(14px)}.pt-game .pt-end-card h1{font-size:25px;color:#e8edcf;letter-spacing:-.9px;margin:10px 0}.pt-game .pt-final-score{display:block;font-size:67px;line-height:1.2;letter-spacing:-3px;color:#c5e5b8;margin:20px 0 13px;font-weight:600;font-variant-numeric:tabular-nums}.pt-game .pt-final-score>small{font-size:23px;margin-left:5px;letter-spacing:0;font-weight:450}.pt-game .pt-end-card p{font-size:11px;color:#adc6c1;line-height:1.8}.pt-game .pt-end-card>div{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:23px}.pt-game .pt-end-card.is-bankrupt .pt-final-score{color:#e2c097}.pt-game .pt-end-card.is-bankrupt .pt-end-icon{color:#e2bd89;background:#94754632;border-color:#ceaa7160}.pt-game .pt-toast{position:absolute;z-index:75;top:104px;left:50%;transform:translate(-50%);display:flex;align-items:center;gap:10px;width:max-content;max-width:min(520px,calc(100% - 32px));padding:12px 12px 12px 16px;border:1px solid #b5d7a670;background:#1c443fef;color:#dfedd3;border-radius:11px;box-shadow:0 7px 30px #173b404d;font-size:12px;line-height:1.7;animation:ptToastIn .2s ease-out;backdrop-filter:blur(14px)}.pt-game .pt-toast>svg{flex-shrink:0;color:#bee2b1}.pt-game .pt-toast>span{word-break:keep-all}.pt-game .pt-toast>button{display:grid;place-items:center;flex-shrink:0;width:29px;height:29px;border-radius:7px;background:transparent;color:#aac4b7}.pt-game .pt-toast>button:hover{background:#a1b28b24}.pt-game .pt-toast-error{background:#543f32f5;color:#f3dfc8;border-color:#dbb0807a}.pt-game .pt-toast-error>svg{color:#ebc38f}@keyframes ptSheetIn{0%{opacity:0;transform:translate(-50%,15px)}to{opacity:1;transform:translate(-50%)}}@keyframes ptResultIn{0%{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes ptToastIn{0%{opacity:0;transform:translate(-50%,-5px)}to{opacity:1;transform:translate(-50%)}}@media (min-width:1500px){.pt-game .pt-hud{left:36px;right:36px;top:26px}.pt-game .pt-field-message{left:36px;top:116px}.pt-game .pt-side-tools{right:36px;top:116px}.pt-game .pt-next-milestone{left:36px;bottom:127px}.pt-game .pt-dock{bottom:40px}.pt-game .pt-map-caption{bottom:17px}.pt-game .pt-sheet{bottom:130px}.pt-game .pt-welcome{left:7%;width:420px;padding:32px 31px 25px}.pt-game .pt-welcome h1{font-size:30px}}@media (max-width:1080px){.pt-game .pt-hud{left:19px;right:19px;top:18px}.pt-game .pt-brand{gap:8px}.pt-game .pt-brand strong{font-size:14px}.pt-game .pt-brand p{font-size:7px;letter-spacing:1.6px}.pt-game .pt-brand>span{width:40px;height:40px}.pt-game .pt-hud-resources{left:52%}.pt-game .pt-cash{padding:9px 15px 9px 12px;min-width:135px;gap:8px}.pt-game .pt-cash strong,.pt-game .pt-hud-year strong{font-size:20px}.pt-game .pt-hud-year{padding:8px 16px;min-width:112px}.pt-game .pt-stage-button{font-size:10px;padding:9px}.pt-game .pt-field-message{left:19px;top:99px;width:290px;padding:13px 14px 11px 11px;gap:9px}.pt-game .pt-field-message h2{font-size:12px}.pt-game .pt-field-message p{font-size:10px}.pt-game .pt-side-tools{right:19px;top:99px}.pt-game .pt-next-milestone{left:19px;max-width:230px;bottom:119px}.pt-game .pt-welcome{left:4%;width:369px;padding:25px 24px 21px}.pt-game .pt-welcome h1{font-size:26px}.pt-game .pt-sheet{width:calc(100% - 38px);bottom:118px;max-height:66%}.pt-game .pt-project-options{gap:10px}.pt-game .pt-project-option{padding:14px 14px 12px}.pt-game .pt-project-option h3{font-size:13px}.pt-game .pt-build-layout.has-quote{grid-template-columns:minmax(0,1fr) 227px;gap:13px}.pt-game .pt-quote{padding:16px 14px}.pt-game .pt-service-numbers{gap:12px}.pt-game .pt-service-numbers>span+span{padding-left:12px}.pt-game .pt-service-numbers strong{font-size:23px}.pt-game .pt-operation-card{padding:16px}.pt-game .pt-price-card{gap:22px;padding:18px}}@media (max-width:800px){.pt-game .pt-hud{top:15px;left:15px;right:15px;gap:10px}.pt-game .pt-brand{gap:8px}.pt-game .pt-brand strong{font-size:13px;letter-spacing:.7px}.pt-game .pt-brand p{font-size:6px;letter-spacing:1.2px}.pt-game .pt-brand>span{width:37px;height:39px;border-radius:11px}.pt-game .pt-brand>span>svg{width:21px}.pt-game .pt-stage-button{display:none}.pt-game .pt-hud-resources{left:56%}.pt-game .pt-cash{min-width:124px;padding:8px 13px 8px 11px;gap:8px}.pt-game .pt-hud-year{min-width:103px;padding:8px 12px}.pt-game .pt-cash>svg{width:20px}.pt-game .pt-hud-menu{width:40px;height:42px;border-radius:11px}.pt-game .pt-field-message{top:91px;left:15px;width:266px;padding:11px;gap:8px}.pt-game .pt-advisor-avatar{width:36px;height:42px;border-radius:10px}.pt-game .pt-field-message>div>span{font-size:8px}.pt-game .pt-field-message>div>span>i{font-size:7px}.pt-game .pt-field-message h2{font-size:12px}.pt-game .pt-field-message p{-webkit-line-clamp:2;font-size:10px}.pt-game .pt-side-tools{top:91px;right:15px;flex-direction:column;align-items:flex-end}.pt-game .pt-side-tools>button{font-size:10px;min-height:38px;padding:7px 10px}.pt-game .pt-project-count>span{font-size:9px}.pt-game .pt-next-milestone{left:15px;max-width:215px;bottom:128px}.pt-game .pt-first-hint{bottom:187px}.pt-game .pt-dock{bottom:29px;gap:7px}.pt-game .pt-dock-tools{gap:1px;padding:5px}.pt-game .pt-dock-tools>button{min-width:62px;min-height:60px;font-size:9px;gap:5px}.pt-game .pt-dock-tools>button>svg{width:21px}.pt-game .pt-operate-button{min-width:171px;padding:12px 14px;gap:13px}.pt-game .pt-operate-button strong{font-size:13px}.pt-game .pt-operate-button small{font-size:8px}.pt-game .pt-sheet{bottom:112px;width:calc(100% - 28px);max-height:67%}.pt-game .pt-sheet-head{padding:10px 19px 13px}.pt-game .pt-sheet-head h2{font-size:18px}.pt-game .pt-sheet-body{padding:17px 19px 21px}.pt-game .pt-build-layout.has-quote{grid-template-columns:minmax(0,1fr) 209px}.pt-game .pt-build-layout.has-quote .pt-project-options{grid-template-columns:1fr}.pt-game .pt-project-option{min-height:190px}.pt-game .pt-quote h3{font-size:15px}.pt-game .pt-operations-grid{gap:11px}.pt-game .pt-year-news{grid-template-columns:1fr;gap:14px;padding:16px}.pt-game .pt-news-market{border-left:0;border-top:1px solid #a0c2bb2b;padding:13px 0 0;display:flex;align-items:center;gap:18px}.pt-game .pt-news-market>span{margin:0;flex:1}.pt-game .pt-news-market>span>small{display:block;margin:3px 0 0}.pt-game .pt-news-market>div{gap:18px}.pt-game .pt-news-market strong{font-size:18px}.pt-game .pt-service-numbers{gap:8px}.pt-game .pt-service-numbers>span+span{padding-left:8px}.pt-game .pt-service-numbers strong{font-size:21px}.pt-game .pt-service-numbers small{font-size:9px}.pt-game .pt-operation-card h3{font-size:15px}.pt-game .pt-price-card{grid-template-columns:1fr;gap:17px}.pt-game .pt-price-preview{display:flex;justify-content:space-between}.pt-game .pt-price-preview strong{display:inline;margin-left:9px;font-size:13px}.pt-game .pt-mini-issues{grid-template-columns:1fr}.pt-game .pt-mini-issues>article{padding:11px 12px}.pt-game .pt-request-grid{grid-template-columns:1fr}.pt-game .pt-ledger-top{gap:12px}.pt-game .pt-ledger-top>div+div{padding-left:14px}.pt-game .pt-ledger-top strong{font-size:29px}.pt-game .pt-ledger-top>div>small{font-size:9px}.pt-game .pt-ledger-grid{grid-template-columns:1fr;gap:24px}.pt-game .pt-rival-detail{gap:20px}.pt-game .pt-rival-detail h3{font-size:23px}.pt-game .pt-rival-detail .pt-service-numbers{gap:9px}.pt-game .pt-rival-detail .pt-service-numbers strong{font-size:21px}.pt-game .pt-result-card{padding:27px 25px 23px}}@media (max-width:560px){.pt-game{min-height:590px}.pt-game .pt-hud{left:12px;right:12px;top:12px}.pt-game .pt-brand>div{display:none}.pt-game.pt-is-welcome .pt-brand>div{display:block}.pt-game .pt-brand>span{width:37px;height:41px}.pt-game .pt-hud-resources{left:50%;border-radius:12px}.pt-game .pt-cash{min-width:122px;padding:8px 11px;gap:7px}.pt-game .pt-cash strong{font-size:18px}.pt-game .pt-cash>span>small,.pt-game .pt-hud-year>small{font-size:8px}.pt-game .pt-hud-year{min-width:94px;padding:8px 11px}.pt-game .pt-hud-year strong{font-size:18px}.pt-game .pt-hud-year>span{top:8px;right:7px;font-size:7px}.pt-game .pt-cash strong em,.pt-game .pt-hud-year strong em{font-size:9px;margin-left:3px}.pt-game .pt-hud-menu{width:37px;height:41px}.pt-game .pt-hud-menu>svg{width:20px}.pt-game .pt-welcome{top:auto;bottom:24px;left:50%;transform:translate(-50%);width:calc(100% - 28px);max-width:388px;max-height:calc(100% - 125px);padding:21px 22px 17px;border-radius:19px}.pt-game .pt-welcome h1{font-size:24px;margin:12px 0 8px;line-height:1.45}.pt-game .pt-welcome>p{font-size:11px;line-height:1.8}.pt-game .pt-welcome-kicker{font-size:7px}.pt-game .pt-start-scenarios{margin:17px 0 11px;gap:6px}.pt-game .pt-start-scenarios>button{padding:8px 10px;min-height:53px;gap:8px}.pt-game .pt-start-scenarios strong{font-size:11px}.pt-game .pt-start-scenarios small{font-size:9px;line-height:1.65}.pt-game .pt-start-settings{margin-bottom:13px;padding-bottom:9px}.pt-game .pt-start-settings>summary{font-size:10px;min-height:27px}.pt-game .pt-start-button{min-height:44px;font-size:12px}.pt-game .pt-welcome-links{margin:5px 0 0;gap:3px}.pt-game .pt-welcome-note{font-size:8px;margin-top:2px}.pt-game .pt-field-message{top:83px;left:12px;width:246px;padding:10px 10px 8px;gap:8px;border-radius:12px}.pt-game .pt-advisor-avatar{width:32px;height:36px;border-radius:9px}.pt-game .pt-advisor-avatar svg{width:30px;height:34px}.pt-game .pt-field-message h2{font-size:11px;margin-bottom:4px}.pt-game .pt-field-message p{font-size:9px;line-height:1.7}.pt-game .pt-field-message button{font-size:10px;min-height:28px;padding-top:5px}.pt-game .pt-field-message:after{left:23px}.pt-game .pt-side-tools{right:12px;top:83px;gap:6px}.pt-game .pt-side-tools>button{width:43px;min-height:43px;padding:6px;flex-direction:column;gap:3px;border-radius:10px;font-size:8px;line-height:1}.pt-game .pt-side-tools>button>svg{width:16px;height:16px}.pt-game .pt-project-count>span{font-size:0}.pt-game .pt-project-count strong{font-size:9px;margin-left:0}.pt-game .pt-first-hint{bottom:199px;padding:6px 6px 6px 11px;gap:5px;font-size:10px}.pt-game .pt-first-hint>svg{width:14px}.pt-game .pt-next-milestone{bottom:151px;left:12px;max-width:232px;padding:7px 10px;gap:7px;border-radius:9px}.pt-game .pt-next-milestone>span{font-size:7px}.pt-game .pt-next-milestone strong{font-size:10px}.pt-game .pt-next-milestone>svg:first-child{width:14px}.pt-game .pt-dock{bottom:25px;left:12px;right:12px;transform:none;display:grid;grid-template-columns:1fr;gap:6px}.pt-game .pt-dock-tools{justify-content:space-around;gap:0;border-radius:13px;padding:4px 5px}.pt-game .pt-dock-tools>button{flex:1;min-width:0;min-height:53px;font-size:9px;gap:4px;border-radius:9px}.pt-game .pt-dock-tools>button>svg{width:19px;height:19px}.pt-game .pt-dock-tools>button>i{right:calc(50% - 23px);top:0}.pt-game .pt-dock-tools>button.is-active:after{bottom:-5px;width:19px;height:2px}.pt-game .pt-operate-button{min-width:0;min-height:44px;justify-content:center;padding:8px 15px;gap:15px;border-radius:10px}.pt-game .pt-operate-button>span{display:flex;align-items:center;gap:10px}.pt-game .pt-operate-button small{margin:0;font-size:9px}.pt-game .pt-operate-button strong{font-size:13px}.pt-game .pt-operate-button>svg{width:13px;height:15px}.pt-game .pt-map-caption{font-size:6.5px;bottom:7px;letter-spacing:0}.pt-game .pt-sheet{bottom:145px;width:calc(100% - 20px);max-height:calc(100% - 226px);border-radius:15px}.pt-game .pt-sheet-handle{margin-top:7px;height:3px;width:31px}.pt-game .pt-sheet-head{padding:10px 14px 12px;gap:10px}.pt-game .pt-sheet-head h2{font-size:16px;line-height:1.5;letter-spacing:-.5px}.pt-game .pt-sheet-head .pt-eyebrow{font-size:7px;letter-spacing:.5px;margin-bottom:4px}.pt-game .pt-icon-button{width:35px;height:36px;border-radius:9px}.pt-game .pt-icon-button>svg{width:18px}.pt-game .pt-sheet-body{padding:14px 14px 18px}.pt-game .pt-tabs{gap:4px;padding-bottom:11px;margin-bottom:9px}.pt-game .pt-tabs>button{gap:4px;min-height:49px;flex-direction:column;font-size:10px;padding:6px 4px;border-radius:8px}.pt-game .pt-tabs>button>svg{width:16px;height:16px}.pt-game .pt-build-tools{gap:4px;margin-bottom:12px}.pt-game .pt-filters{gap:1px}.pt-game .pt-filters>button{font-size:10px;padding:5px 8px;min-height:32px}.pt-game .pt-text-link{font-size:10px;min-height:32px;margin-left:auto;padding:4px 0 4px 5px}.pt-game .pt-actions-left{font-size:9px;margin-left:0;width:100%;padding:4px 2px}.pt-game .pt-actions-left strong{font-size:10px}.pt-game .pt-project-options{grid-template-columns:1fr;gap:10px}.pt-game .pt-build-layout.has-quote{display:flex;flex-direction:column-reverse;gap:13px}.pt-game .pt-quote{position:static;padding:14px}.pt-game .pt-quote h3{font-size:15px;margin:7px 0}.pt-game .pt-quote dl{margin:12px 0;display:grid;grid-template-columns:1fr 1fr;gap:0 15px}.pt-game .pt-quote dl>div{font-size:10px;gap:4px;padding:6px 0}.pt-game .pt-quote dd{font-size:11px}.pt-game .pt-quote>small{font-size:9px;margin-top:9px}.pt-game .pt-project-option{padding:14px;min-height:0}.pt-game .pt-project-option h3{font-size:13px}.pt-game .pt-project-option>p{font-size:11px}.pt-game .pt-project-option>div:first-child{margin-bottom:9px}.pt-game .pt-cost{font-size:20px}.pt-game .pt-project-effect{font-size:11px;padding:8px 10px}.pt-game .pt-project-option footer{font-size:10px}.pt-game .pt-button{font-size:12px;min-height:42px;padding:9px 13px}.pt-game .pt-panel-intro{flex-direction:column;align-items:flex-start;gap:10px}.pt-game .pt-panel-intro>p,.pt-game .pt-panel-copy{font-size:11px}.pt-game .pt-project-row{gap:10px;flex-wrap:wrap;padding:13px}.pt-game .pt-phase-icon{width:35px;height:40px;border-radius:9px}.pt-game .pt-phase-icon>svg{width:20px}.pt-game .pt-project-row-main{flex-basis:calc(100% - 45px)}.pt-game .pt-project-row h3{font-size:13px}.pt-game .pt-project-row p{font-size:10px;line-height:1.9}.pt-game .pt-project-row small{font-size:9px}.pt-game .pt-project-row-actions{margin-left:45px;flex-direction:row;flex-wrap:wrap;gap:4px}.pt-game .pt-project-row-actions>.pt-button{font-size:10px;min-height:35px;padding:6px 8px}.pt-game .pt-operations-grid{grid-template-columns:1fr}.pt-game .pt-year-news{padding:14px;gap:12px}.pt-game .pt-news-main{gap:9px}.pt-game .pt-news-main>svg{width:19px}.pt-game .pt-news-main h3{font-size:14px}.pt-game .pt-news-main p{font-size:10px}.pt-game .pt-news-main .pt-eyebrow{font-size:8px}.pt-game .pt-news-effects>span{font-size:9px}.pt-game .pt-news-market{gap:12px}.pt-game .pt-news-market>span{font-size:9px}.pt-game .pt-news-market>div{gap:13px}.pt-game .pt-news-market .pt-fuel{font-size:9px;padding:2px 5px}.pt-game .pt-news-market strong{font-size:17px}.pt-game .pt-news-warnings{font-size:10px}.pt-game .pt-operation-card{padding:15px}.pt-game .pt-operation-card h3{font-size:15px;margin:12px 0 15px}.pt-game .pt-service-numbers{gap:13px}.pt-game .pt-service-numbers>span+span{padding-left:13px}.pt-game .pt-service-numbers strong{font-size:23px}.pt-game .pt-service-numbers small{font-size:9px}.pt-game .pt-inline-actions{gap:4px}.pt-game .pt-inline-actions>.pt-button{font-size:10px;padding:7px 9px;min-height:37px}.pt-game .pt-price-card{padding:15px}.pt-game .pt-price-card h3{font-size:14px}.pt-game .pt-price-card p{font-size:11px}.pt-game .pt-price-preview{font-size:9px;gap:7px}.pt-game .pt-price-preview strong{font-size:12px;margin-left:5px}.pt-game .pt-price-buttons>button{min-height:41px}.pt-game .pt-mini-issues{gap:8px}.pt-game .pt-mini-issues p{font-size:10px}.pt-game .pt-request-card{padding:15px}.pt-game .pt-person-avatar{width:38px;height:40px;border-radius:10px}.pt-game .pt-person-avatar>svg{width:21px}.pt-game .pt-request-card>header{gap:8px;flex-wrap:wrap}.pt-game .pt-request-card>header>div>span{font-size:8px}.pt-game .pt-request-card h3{font-size:13px}.pt-game .pt-request-card>header>.pt-fuel{margin-left:46px}.pt-game .pt-request-card blockquote{font-size:14px;padding-left:12px;margin:17px 0}.pt-game .pt-request-terms{gap:9px}.pt-game .pt-request-terms small{font-size:9px}.pt-game .pt-request-terms strong{font-size:11px}.pt-game .pt-request-card li,.pt-game .pt-current-contracts li{font-size:10px}.pt-game .pt-request-card footer{gap:5px}.pt-game .pt-request-card footer .pt-button{font-size:11px}.pt-game .pt-rival-tabs{gap:5px;margin-bottom:16px}.pt-game .pt-rival-tabs>button{padding:7px 11px;min-height:37px;font-size:10px}.pt-game .pt-rival-detail{grid-template-columns:1fr;gap:15px}.pt-game .pt-rival-detail h3{font-size:24px}.pt-game .pt-rival-detail .pt-service-numbers strong{font-size:25px}.pt-game .pt-rival-detail p,.pt-game .pt-rival-detail li{font-size:11px}.pt-game .pt-ledger-top{grid-template-columns:1fr 1fr;gap:15px;margin-bottom:19px;padding-bottom:17px}.pt-game .pt-ledger-top>div:nth-child(3){grid-column:1/-1;border-left:0;padding:13px 0 0;border-top:1px solid #a5bfc32c;display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 10px}.pt-game .pt-ledger-top>div:nth-child(3)>span{margin:0}.pt-game .pt-ledger-top>div:nth-child(3)>small{grid-column:1;grid-row:2;margin-top:0}.pt-game .pt-ledger-top>div:nth-child(3)>strong{grid-column:2;grid-row:1/3;font-size:25px}.pt-game .pt-ledger-top>div+div{padding-left:15px}.pt-game .pt-ledger-top strong{font-size:30px}.pt-game .pt-ledger-top>div>span{font-size:10px}.pt-game .pt-ledger-top>div>small{font-size:9px;line-height:1.7}.pt-game .pt-ledger-grid{gap:20px}.pt-game .pt-forecast>div{gap:14px;grid-template-columns:1fr}.pt-game .pt-forecast article{grid-template-columns:1fr auto auto;gap:7px 12px;align-items:center}.pt-game .pt-forecast article>strong{grid-column:auto;font-size:12px;margin:0}.pt-game .pt-forecast article>span{font-size:9px}.pt-game .pt-forecast article>span>b{font-size:11px}.pt-game .pt-fuel-bar{grid-column:1/-1;margin-top:2px;height:5px}.pt-game .pt-stage-intro{gap:13px}.pt-game .pt-stage-mark{width:50px;height:54px;border-radius:15px}.pt-game .pt-stage-mark>svg{width:25px}.pt-game .pt-stage-intro h3{font-size:19px}.pt-game .pt-stage-intro p{font-size:11px}.pt-game .pt-milestone-list>article{padding:12px 10px;gap:10px}.pt-game .pt-milestone-list>article>span{width:30px;height:32px;border-radius:9px}.pt-game .pt-milestone-list h3{font-size:12px}.pt-game .pt-milestone-list p{font-size:10px}.pt-game .pt-milestone-list>article>strong{font-size:9px}.pt-game .pt-office-actions{grid-template-columns:1fr;gap:8px}.pt-game .pt-office-actions>.pt-button{font-size:12px;min-height:45px;padding:11px 14px}.pt-game .pt-view-settings{grid-template-columns:1fr;gap:13px;margin:18px 0;padding:16px 0}.pt-game .pt-office-help p{font-size:11px;line-height:1.9}.pt-game .pt-save-note{font-size:11px}.pt-game .pt-fineprint{font-size:10px}.pt-game .pt-operation-replay{bottom:25px;padding:19px 17px 15px;max-width:calc(100% - 24px);border-radius:15px}.pt-game .pt-replay-title strong{font-size:17px}.pt-game .pt-replay-title>span:last-child{font-size:18px}.pt-game .pt-replay-steps{font-size:8px;margin-bottom:16px}.pt-game .pt-replay-controls{gap:5px}.pt-game .pt-replay-controls>button{font-size:10px;padding:7px 8px;gap:5px;min-height:38px}.pt-game .pt-replay-controls>div{gap:0}.pt-game .pt-replay-controls>div>button{min-width:29px;min-height:36px;font-size:10px}.pt-game .pt-replay-controls>button:last-child{padding:7px 8px}.pt-game .pt-operation-replay>small{font-size:8px;margin-top:12px}.pt-game .pt-report-backdrop{padding:16px}.pt-game .pt-result-card{border-radius:18px;padding:24px 18px 20px}.pt-game .pt-result-badge{width:57px;height:57px;border-radius:17px;margin-bottom:17px}.pt-game .pt-result-badge>svg{width:27px}.pt-game .pt-result-card h2{font-size:21px;line-height:1.55;letter-spacing:-.7px}.pt-game .pt-result-card>.pt-eyebrow{font-size:8px}.pt-game .pt-result-stats{gap:7px;margin:22px 0 17px}.pt-game .pt-result-stats>div{padding:13px 5px 11px;border-radius:9px}.pt-game .pt-result-stats>div>span{font-size:8px;margin-bottom:5px}.pt-game .pt-result-stats strong{font-size:23px;letter-spacing:-.7px}.pt-game .pt-result-stats strong>small{font-size:9px;margin-left:2px}.pt-game .pt-result-stats em{font-size:7px;margin-top:5px}.pt-game .pt-completion-banner{padding:12px;gap:9px}.pt-game .pt-completion-banner strong{font-size:11px}.pt-game .pt-completion-banner p{font-size:10px}.pt-game .pt-result-takeaway{font-size:11px;margin:10px 2px 20px}.pt-game .pt-result-card footer{gap:6px}.pt-game .pt-result-card footer .pt-button{min-width:0;flex:1;font-size:11px;padding:9px;gap:6px}.pt-game .pt-result-card footer .pt-button>svg{width:15px}.pt-game .pt-end-card{max-width:calc(100% - 26px);max-height:calc(100% - 195px);padding:23px 17px;top:47%}.pt-game .pt-end-card h1{font-size:22px}.pt-game .pt-end-icon{width:56px;height:58px;border-radius:17px;margin-bottom:17px}.pt-game .pt-final-score{font-size:60px;margin:18px 0 11px}.pt-game .pt-end-card>div{gap:7px;margin-top:21px}.pt-game .pt-end-card .pt-button{font-size:11px;min-height:41px;padding:9px 11px}.pt-game .pt-toast{top:76px;padding:10px 8px 10px 12px;font-size:11px;gap:8px;border-radius:10px;max-width:calc(100% - 25px)}.pt-game .pt-toast>button{width:26px;height:29px}}@media (max-width:370px){.pt-game .pt-hud-resources{left:49%}.pt-game .pt-cash{min-width:108px;padding:7px 9px;gap:6px}.pt-game .pt-cash>svg{width:17px}.pt-game .pt-hud-year{min-width:86px;padding:7px 9px}.pt-game .pt-hud-year>span{display:none}.pt-game .pt-hud-year strong,.pt-game .pt-cash strong{font-size:18px}.pt-game .pt-brand>span{width:33px}.pt-game .pt-hud-menu{width:33px}.pt-game .pt-field-message{width:230px}.pt-game .pt-field-message p{font-size:9px}.pt-game .pt-side-tools>button{width:38px}.pt-game .pt-replay-controls>button{padding:7px 6px;font-size:9px}.pt-game .pt-replay-controls>div>button{min-width:25px}.pt-game .pt-replay-controls>button>svg{width:13px}.pt-game .pt-result-stats strong{font-size:21px}}@media (max-height:680px) and (min-width:561px){.pt-game{min-height:520px}.pt-game .pt-welcome{top:84px;bottom:20px;transform:none;max-height:calc(100% - 104px);width:365px;padding:22px 23px 18px}.pt-game .pt-welcome h1{font-size:24px;margin:11px 0 8px}.pt-game .pt-start-scenarios{margin:15px 0 10px}.pt-game .pt-start-scenarios>button{min-height:50px;padding:8px 10px}.pt-game .pt-start-scenarios small{font-size:9px}.pt-game .pt-start-settings{margin-bottom:12px;padding-bottom:7px}.pt-game .pt-welcome-note{font-size:8px}.pt-game .pt-sheet{max-height:calc(100% - 199px)}.pt-game .pt-field-message{top:93px}.pt-game .pt-first-hint{display:none}.pt-game .pt-end-card{max-height:calc(100% - 190px);padding:22px}.pt-game .pt-end-icon{display:none}.pt-game .pt-final-score{font-size:53px;margin:12px 0}}@media (prefers-reduced-motion:reduce){.pt-game *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}.pt-game{--pt-mint:#8de6b5;--pt-yellow:#ffcf62;background:#168db8}.pt-game .pt-scene-vignette{background:linear-gradient(180deg,#0d56612b,transparent 18%,transparent 83%,#135f7442)}.pt-game .pt-brand>span{background:linear-gradient(145deg,#39c9cc,#07989e);border:2px solid #d2fff2;color:#fff5ad;box-shadow:0 3px #11667d,0 6px 12px #07596e35,inset 0 2px #ffffff65}.pt-game .pt-brand strong{color:#fffdf0;text-shadow:0 2px 0 #226878,0 3px 9px #1554696b}.pt-game .pt-brand strong small{background:#fff1bb;color:#216476;border:1px solid #ffffe8;text-shadow:none}.pt-game .pt-brand p{color:#ecfff5;text-shadow:0 1px 3px #176281}.pt-game .pt-hud-resources{background:linear-gradient(180deg,#fffdf0,#f5e9cb);border:2px solid #ffffed;box-shadow:0 4px #1c6578,0 8px 18px #15526b30,inset 0 -3px #dac69c;backdrop-filter:none}.pt-game .pt-cash{color:#d99118}.pt-game .pt-cash strong{color:#76562a}.pt-game .pt-cash>span>small,.pt-game .pt-hud-year>small{color:#557d82;font-weight:650}.pt-game .pt-cash strong em,.pt-game .pt-hud-year strong em{color:#5f8588}.pt-game .pt-hud-year{border-left:1px solid #cdd3b2}.pt-game .pt-hud-year strong{color:#245c6c}.pt-game .pt-hud-year>span{color:#5f898c}.pt-game .pt-hud-menu,.pt-game .pt-stage-button{background:linear-gradient(#fffeec,#e9f0d8);color:#245d6c;border:2px solid #ffffee;box-shadow:0 3px #246a78,0 6px 13px #15526b30,inset 0 2px #fff}.pt-game .pt-stage-button>svg{color:#d99423}.pt-game .pt-stage-button:hover:not(:disabled),.pt-game .pt-hud-menu:hover:not(:disabled){background:#fff5c6}.pt-game .pt-field-message{background:linear-gradient(135deg,#fffbed,#f4efd8);border:2px solid #ffffef;box-shadow:0 4px #216e7d,0 10px 24px #175a6e2b;backdrop-filter:none}.pt-game .pt-field-message:after{background:#f4efd8;border-color:#ffffef;border-width:2px}.pt-game .pt-advisor-avatar{background:linear-gradient(145deg,#91e0b5,#4cbba7);border-color:#fff5d0}.pt-game .pt-field-message>div>span{color:#527b80;font-weight:700}.pt-game .pt-field-message>div>span>i{color:#af7b29}.pt-game .pt-field-message h2{color:#24596b}.pt-game .pt-field-message p{color:#55777b}.pt-game .pt-field-message button{color:#137e74;font-weight:800}.pt-game .pt-field-message button:hover{color:#a86d12}.pt-game .pt-dock{filter:drop-shadow(0 9px 16px #124e684a)}.pt-game .pt-dock-tools{background:linear-gradient(180deg,#ffe,#e6edd5);border:2px solid #fffff0;box-shadow:0 4px #236d7b,inset 0 -3px #bccfaf;backdrop-filter:none}.pt-game .pt-dock-tools>button{color:#2b6675;font-weight:750}.pt-game .pt-dock-tools>button>svg{filter:drop-shadow(0 1px 0 #fff)}.pt-game .pt-dock-tools>button:nth-child(1)>svg{color:#d89225}.pt-game .pt-dock-tools>button:nth-child(2)>svg{color:#168f86}.pt-game .pt-dock-tools>button:nth-child(3)>svg{color:#d6814c}.pt-game .pt-dock-tools>button:nth-child(4)>svg{color:#368abb}.pt-game .pt-dock-tools>button:nth-child(5)>svg{color:#8565b0}.pt-game .pt-dock-tools>button:hover:not(:disabled){background:#bcded372;color:#245b6b}.pt-game .pt-dock-tools>button.is-active{background:#afe1c6;color:#1b675c;box-shadow:inset 0 2px #85bca5}.pt-game .pt-dock-tools>button.is-active:after{background:#258b7a}.pt-game .pt-dock-tools>button>i{border-color:#fff3cf;background:#ffa84b;color:#784520}.pt-game .pt-operate-button{background:linear-gradient(145deg,#ffe58d,#ffbe52);border:2px solid #fff7ba;color:#664a23;box-shadow:0 4px #a56f28,inset 0 2px #fffbd4,inset 0 -3px #e79d38}.pt-game .pt-operate-button small{color:#84612c}.pt-game .pt-operate-button>svg{fill:#735026;stroke:#735026}.pt-game .pt-side-tools>button,.pt-game .hs-camera{background:linear-gradient(#fffbea,#e6efda);border:2px solid #ffffeb;color:#2c6b78;box-shadow:0 3px #216b7b,0 6px 12px #13536b30;backdrop-filter:none}.pt-game .pt-side-tools>button:hover{background:#fff2b7}.pt-game .pt-project-count strong{color:#a97928}.pt-game .hs-camera button{color:#2d6c78}.pt-game .hs-camera button:hover{background:#a5d9c94f;color:#154f61}.pt-game .hs-camera>span{background:#9bc4bd}.pt-game .pt-next-milestone{background:#176d72e8;border:2px solid #b9f0cd80;box-shadow:0 3px #114b62}.pt-game .pt-first-hint{background:#185b77df;border-color:#d8f3e963}.pt-game .pt-map-caption{color:#f0fff3;text-shadow:0 1px 3px #07516d}.pt-game .pt-toast{border-width:2px;box-shadow:0 4px #104d52,0 10px 24px #12466f45}.pt-game .pt-quest-card{position:absolute;z-index:6;top:108px;left:26px;width:310px;padding:13px 16px 14px;border:2px solid #fff9dc;border-radius:18px;color:#315c64;background:linear-gradient(145deg,#fff9e7,#f3ebcb);box-shadow:0 5px #b3bd935e,0 11px 30px #174e6840}.pt-game .pt-quest-card:after{content:"";position:absolute;bottom:-7px;left:25px;width:12px;height:12px;background:#f4edcf;border-right:2px solid #fff9dc;border-bottom:2px solid #fff9dc;transform:rotate(45deg)}.pt-game .pt-quest-card>header{display:flex;flex-shrink:0;align-items:center;gap:8px;margin:-2px 0 9px}.pt-game .pt-quest-guide{display:grid;place-items:center;width:42px;height:47px;border-radius:15px;background:#d1e8cd;border:1px solid #dcecc6;flex-shrink:0}.pt-game .pt-quest-card>header>div{min-width:0;flex:1}.pt-game .pt-quest-card>header small{display:block;color:#788b70;font-size:9px;font-weight:650;letter-spacing:.1px}.pt-game .pt-quest-card>header strong{display:block;font-size:11px;color:#376c6c;margin-top:2px}.pt-game .pt-quest-card>header button{display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;border:1px solid #d9ddbd;border-radius:9px;background:#fff7db;min-width:49px;min-height:42px;padding:5px;color:#6b876e;font-size:8px;font-weight:700}.pt-game .pt-quest-card>header button:hover{background:#e5eed2;color:#286c66}.pt-game .pt-quest-heading{display:flex;align-items:center;gap:7px;margin-bottom:5px;min-height:20px}.pt-game .pt-quest-heading>span{display:inline-flex;align-items:center;font-size:8px;color:#397561;font-weight:800;background:#d9ebc8;border:1px solid #c5ddb2;border-radius:5px;padding:2px 6px;white-space:nowrap}.pt-game .pt-quest-heading>b{display:flex;align-items:center;gap:3px;font-size:8px;font-weight:700;color:#b37840}.pt-game .pt-quest-waiting .pt-quest-heading>span{background:#f9e6b8;border-color:#e9d39b;color:#92712f}.pt-game .pt-quest-card h2{color:#275e69;font-size:16px;letter-spacing:-.5px;line-height:1.45}.pt-game .pt-quest-card .pt-quest-description{font-size:11px;color:#678078;line-height:1.6;margin-top:5px}.pt-game .pt-quest-checklist{display:flex;flex-direction:column;gap:4px;list-style:none;padding:0;margin:10px 0 9px}.pt-game .pt-quest-checklist>li{display:flex;align-items:flex-start;gap:6px;font-size:10px;color:#587970;line-height:1.6}.pt-game .pt-quest-checklist>li>span,.pt-game .pt-journal-steps>li>span{display:grid;place-items:center;width:13px;height:13px;margin-top:2px;flex-shrink:0;border:1.5px solid #becfaf;border-radius:4px;background:#faf9e9;color:#fff8dc}.pt-game .pt-quest-checklist>li.is-done{color:#7d9a7b}.pt-game .pt-quest-checklist>li.is-done>span{background:#70a98b;border-color:#70a98b}.pt-game .pt-quest-progress>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:10px;margin-bottom:6px;color:#b3d0c5}.pt-game .pt-quest-progress>div:first-child>strong{font-size:11px;white-space:nowrap;color:#d1eed3}.pt-game .pt-quest-progress>div[role=progressbar]{height:7px;border-radius:8px;overflow:hidden;background:#819a7840;box-shadow:inset 0 1px 2px #142a3224}.pt-game .pt-quest-progress>div[role=progressbar]>i{display:block;height:100%;min-width:0;border-radius:8px;background:linear-gradient(90deg,#5da98b,#a8d78e);transition:width .45s ease}.pt-game .pt-quest-card .pt-quest-progress>div:first-child{font-size:9px;color:#87906e;margin-bottom:5px}.pt-game .pt-quest-card .pt-quest-progress>div:first-child>strong{font-size:10px;color:#4a8972}.pt-game .pt-quest-card .pt-quest-progress>div[role=progressbar]{height:6px;background:#d8daba}.pt-game .pt-quest-card-actions{display:flex;flex-shrink:0;flex-direction:column;align-items:stretch;margin-top:11px;gap:5px}.pt-game .pt-quest-card-actions>.pt-button{width:100%;font-size:11px;min-height:40px;border-radius:10px;padding:9px 10px;background:linear-gradient(#459e87,#338674);border:1px solid #317d69;box-shadow:0 3px #267568;color:#fff8dc}.pt-game .pt-quest-card-actions>.pt-button:hover{background:linear-gradient(#53ae95,#409781);border-color:#267568}.pt-game .pt-quest-card-actions>.pt-button:active{box-shadow:0 1px #267568;transform:translateY(2px)}.pt-game .pt-quest-secondary{display:flex;align-items:center;justify-content:center;gap:2px;min-height:28px;padding:4px;background:transparent;color:#75846b;font-size:9px;font-weight:650}.pt-game .pt-quest-secondary:hover{color:#286f64}.pt-game .pt-harbor-mood{position:absolute;z-index:6;left:26px;bottom:122px;display:flex;align-items:center;gap:9px;max-width:270px;min-height:60px;padding:8px 11px 8px 10px;border:2px solid #fff5d9;border-radius:15px;background:linear-gradient(140deg,#fcf5df,#f0e9c7);box-shadow:0 4px #9da98555,0 8px 20px #15516b30;color:#477c70;text-align:left}.pt-game .pt-harbor-mood>span{flex:1;min-width:0}.pt-game .pt-harbor-mood small{display:block;font-size:8px;color:#7b957c;line-height:1.4}.pt-game .pt-harbor-mood strong{display:block;font-size:13px;color:#357264;line-height:1.5;margin-top:2px;letter-spacing:-.2px}.pt-game .pt-harbor-mood:hover{background:#fff7d9;transform:translateY(-1px)}.pt-game .pt-mood-thriving{border-color:#fff4b5;background:linear-gradient(140deg,#fff6ce,#e9efc7)}.pt-game .pt-mood-thriving strong{color:#a5782b}.pt-game .pt-mood-struggling,.pt-game .pt-mood-closed{background:linear-gradient(140deg,#efe1ce,#d6cab7);border-color:#f5e6cf}.pt-game .pt-mood-struggling strong,.pt-game .pt-mood-closed strong{color:#93725d}.pt-game .pt-mood-struggling small,.pt-game .pt-mood-closed small{color:#998571}.pt-game .pt-quest-board{padding-bottom:2px}.pt-game .pt-life-detail{padding:18px;border:1px solid #91b6a548;border-radius:14px;background:linear-gradient(125deg,#31574c66,#21475240);margin-bottom:21px}.pt-game .pt-life-detail-heading{display:flex;align-items:center;gap:12px}.pt-game .pt-life-detail-heading>span{display:grid;place-items:center;width:60px;height:62px;background:#90ba8c1a;border:1px solid #b2c7943a;border-radius:17px;flex-shrink:0}.pt-game .pt-life-detail-heading small{display:block;color:#a8c5af;font-size:10px;margin-bottom:2px}.pt-game .pt-life-detail-heading h3{font-size:21px;font-weight:750;color:#edf4cd;letter-spacing:-.45px}.pt-game .pt-life-detail-heading p{font-size:10px;color:#8fb5ae;margin-top:2px}.pt-game .pt-life-reason{font-size:12px;color:#c8ded4;margin-top:12px;line-height:1.7}.pt-game .pt-life-drivers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:14px}.pt-game .pt-life-drivers>article{padding:11px 12px;border:1px solid #91b6a528;border-radius:9px;background:#0e33382e;min-width:0}.pt-game .pt-life-drivers small{display:block;font-size:9px;color:#a0c1b3}.pt-game .pt-life-drivers strong{display:block;font-size:17px;color:#e6efd6;margin-top:2px;letter-spacing:-.3px}.pt-game .pt-life-drivers p{font-size:10px;color:#90b1ac;margin-top:4px;line-height:1.6}.pt-game .pt-life-foot{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px}.pt-game .pt-life-foot>p{font-size:10px;color:#90aaa5;max-width:490px}.pt-game .pt-life-foot>button{display:flex;align-items:center;gap:5px;flex-shrink:0;min-height:36px;background:transparent;color:#b4debc;font-size:11px;padding:4px 6px}.pt-game .pt-life-foot>button:hover{color:#f6e6b7}.pt-game .pt-life-struggling,.pt-game .pt-life-closed{border-color:#b49a7c55;background:linear-gradient(125deg,#66574255,#3a464430)}.pt-game .pt-life-struggling .pt-life-detail-heading h3,.pt-game .pt-life-closed .pt-life-detail-heading h3{color:#eed7b6}.pt-game .pt-quest-board-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;margin:24px 0 15px}.pt-game .pt-quest-board-heading h3{font-size:19px;color:#ecf0d5;letter-spacing:-.5px}.pt-game .pt-quest-board-heading p{font-size:11px;color:#9db9bf;max-width:590px;margin-top:5px}.pt-game .pt-quest-board-heading>span{flex-shrink:0;text-align:right;color:#9bbdb2;font-size:16px;line-height:1.2}.pt-game .pt-quest-board-heading>span>strong{font-size:31px;color:#e1eec0}.pt-game .pt-quest-board-heading>span>small{display:block;font-size:8px;color:#93b3ac;margin-top:5px}.pt-game .pt-earned-badges{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}.pt-game .pt-earned-badges>span{display:flex;align-items:center;gap:5px;font-size:9px;padding:6px 9px;background:#8da45b25;border:1px solid #c4d29547;border-radius:30px;color:#e7dfaa}.pt-game .pt-quest-board-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}.pt-game .pt-journal-quest{border:1px solid #8fb3ad33;border-radius:13px;padding:15px;background:#1538447d;min-width:0;transition:border-color .2s}.pt-game .pt-journal-quest.is-current{border-color:#c4df9d88;background:linear-gradient(135deg,#375d4770,#183f4750);box-shadow:inset 0 2px #d7e8ab15}.pt-game .pt-journal-quest.is-complete{background:#30544933;border-color:#81b68a4d}.pt-game .pt-journal-quest.is-locked{opacity:.72}.pt-game .pt-journal-quest.is-missed{border-color:#ad92723a}.pt-game .pt-journal-quest>header{display:flex;align-items:center;gap:9px;min-height:36px}.pt-game .pt-quest-seal{width:34px;height:35px;display:grid;place-items:center;border:1px solid #9fbc9955;border-radius:11px;background:#7ba16d1f;flex-shrink:0;font-size:12px;font-weight:800;color:#bed0a7}.pt-game .pt-journal-quest.is-complete .pt-quest-seal{background:#84ac6540;border-color:#c0d49370;color:#e0edbe}.pt-game .pt-journal-quest>header>div{flex:1;min-width:0}.pt-game .pt-journal-quest>header small{display:block;color:#97bbad;font-size:8px;margin-bottom:2px}.pt-game .pt-journal-quest>header h3{font-size:14px;color:#e2eed8;letter-spacing:-.3px}.pt-game .pt-quest-deadline{font-size:8px;color:#eac28f;border:1px solid #c7a26c3d;background:#a57e2f18;padding:3px 5px;border-radius:4px;white-space:nowrap}.pt-game .pt-journal-quest>p{font-size:11px;color:#9bb9b8;margin-top:11px;line-height:1.7}.pt-game .pt-journal-steps{padding:0;list-style:none;display:flex;flex-direction:column;gap:7px;margin:13px 0}.pt-game .pt-journal-steps>li{display:flex;align-items:flex-start;gap:7px;font-size:11px;line-height:1.5;color:#c0d5cd}.pt-game .pt-journal-steps>li>span{border-color:#6e9385;background:#30544655}.pt-game .pt-journal-steps>li small{display:block;font-size:9px;color:#89aaa1;margin-top:2px}.pt-game .pt-journal-steps>li.is-done{color:#a6c3ab}.pt-game .pt-journal-steps>li.is-done>span{background:#75a185;border-color:#9ac09f}.pt-game .pt-journal-quest>details{margin-top:11px;font-size:9px;color:#8faea9}.pt-game .pt-journal-quest>details>summary{min-height:28px;padding:6px 0;color:#b4c7b8}.pt-game .pt-journal-quest>details>p{font-size:10px;color:#8fb0a9;padding:3px 0 7px;line-height:1.7}.pt-game .pt-journal-quest>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #88b09e25;margin-top:10px;padding-top:10px}.pt-game .pt-journal-quest>footer>span{display:flex;align-items:center;gap:4px;font-size:8px;color:#abbf9d;min-width:0}.pt-game .pt-journal-quest>footer>.pt-button{font-size:10px;padding:7px 9px;min-height:34px;white-space:nowrap;flex-shrink:0;gap:5px}.pt-game .pt-journal-note{display:flex;align-items:flex-start;gap:10px;padding:17px 2px 0;color:#a6c3b9}.pt-game .pt-journal-note>svg{margin-top:2px;flex-shrink:0;color:#a8c5a4}.pt-game .pt-journal-note strong{font-size:12px;color:#d0ddc1}.pt-game .pt-journal-note p{font-size:10px;color:#9fb4ae;margin-top:3px}.pt-game .pt-journal-note small{display:block;font-size:9px;color:#809d9b;margin-top:5px}.pt-game .pt-quest-focus{outline:2px solid #dbd999!important;outline-offset:3px}.pt-game .pt-quest-celebration{position:absolute;z-index:67;left:50%;top:96px;transform:translate(-50%);display:flex;align-items:center;gap:12px;width:max-content;max-width:min(485px,calc(100% - 30px));padding:12px 12px 12px 14px;border:2px solid #fff1b0;border-radius:15px;background:linear-gradient(130deg,#fdf3d0,#e4ecc3);box-shadow:0 4px #aab17680,0 12px 30px #164d6340;color:#456d56;animation:ptQuestCelebrate .5s cubic-bezier(.2,.8,.3,1.2)}.pt-game .pt-celebration-medal{display:grid;place-items:center;width:47px;height:47px;flex-shrink:0;border:2px solid #efca6e;border-radius:50%;background:linear-gradient(130deg,#ffea9b,#edbd58);box-shadow:inset 0 0 0 3px #fff2b57d;color:#946a28;position:relative}.pt-game .pt-celebration-medal:before,.pt-game .pt-celebration-medal:after{content:"";position:absolute;top:37px;width:11px;height:16px;background:#70a68b;clip-path:polygon(0 0,100% 0,100% 100%,50% 72%,0 100%);z-index:-1}.pt-game .pt-celebration-medal:before{left:7px;transform:rotate(14deg)}.pt-game .pt-celebration-medal:after{right:7px;transform:rotate(-14deg)}.pt-game .pt-quest-celebration>div{min-width:0}.pt-game .pt-quest-celebration small{display:block;font-size:9px;font-weight:750;color:#8a925c;line-height:1.5}.pt-game .pt-quest-celebration strong{display:block;font-size:14px;font-weight:800;color:#3b7164;margin-top:2px;line-height:1.5;word-break:keep-all}.pt-game .pt-quest-celebration p{font-size:10px;color:#7c8f73;margin-top:4px}.pt-game .pt-quest-celebration>button{display:grid;place-items:center;width:28px;height:30px;border-radius:7px;flex-shrink:0;padding:3px;background:transparent;color:#8a9b7b;align-self:flex-start}.pt-game .pt-quest-celebration>button:hover{background:#d4dfb5}.pt-game .pt-quest-celebration~.pt-toast{top:auto;bottom:122px}@keyframes ptQuestCelebrate{0%{opacity:0;transform:translate(-50%,-15px) scale(.9)}to{opacity:1;transform:translate(-50%) scale(1)}}@media (min-width:1500px){.pt-game .pt-quest-card{left:36px;top:116px;width:325px}.pt-game .pt-harbor-mood{left:36px;bottom:132px}}@media (max-width:1080px){.pt-game .pt-quest-card{left:19px;top:99px;width:285px;padding:11px 13px 12px}.pt-game .pt-quest-card h2{font-size:14px}.pt-game .pt-harbor-mood{left:19px;bottom:120px}}@media (max-width:800px){.pt-game .pt-quest-card{left:15px;top:91px;width:268px;padding:10px 12px 11px;border-radius:15px}.pt-game .pt-quest-card>header{margin-bottom:7px;gap:7px}.pt-game .pt-quest-card>header small{font-size:8px}.pt-game .pt-quest-card>header strong{font-size:10px}.pt-game .pt-quest-guide{width:36px;height:39px;border-radius:12px}.pt-game .pt-quest-guide>svg{width:35px;height:39px}.pt-game .pt-quest-card>header button{min-width:43px;min-height:37px;font-size:7px}.pt-game .pt-quest-card .pt-quest-description{font-size:10px}.pt-game .pt-quest-checklist>li{font-size:9px}.pt-game .pt-quest-card-actions>.pt-button{font-size:10px;min-height:37px;padding:8px}.pt-game .pt-harbor-mood{left:15px;bottom:118px;min-height:55px;max-width:235px;padding:7px 9px;gap:7px}.pt-game .pt-harbor-mood strong{font-size:12px}.pt-game .pt-quest-board-list{grid-template-columns:1fr}}@media (max-width:560px){.pt-game .pt-quest-card{top:81px;left:12px;width:calc(100% - 80px);max-width:280px;padding:8px 10px 10px;border-radius:13px}.pt-game .pt-quest-card>header{gap:6px;margin-bottom:6px}.pt-game .pt-quest-card>header strong{font-size:9px}.pt-game .pt-quest-card>header small{font-size:7px}.pt-game .pt-quest-card>header button{min-height:34px;min-width:40px}.pt-game .pt-quest-guide{width:32px;height:35px;border-radius:10px}.pt-game .pt-quest-guide>svg{width:31px;height:35px}.pt-game .pt-quest-heading{margin-bottom:4px;min-height:16px}.pt-game .pt-quest-heading>span,.pt-game .pt-quest-heading>b{font-size:7px}.pt-game .pt-quest-card h2{font-size:13px;line-height:1.4}.pt-game .pt-quest-card .pt-quest-description{font-size:9px;line-height:1.6;margin-top:4px}.pt-game .pt-quest-checklist{margin:7px 0;gap:3px}.pt-game .pt-quest-checklist>li{font-size:8px;gap:5px}.pt-game .pt-quest-checklist>li>span{width:11px;height:11px;margin-top:1px}.pt-game .pt-quest-card .pt-quest-progress>div:first-child{font-size:8px;margin-bottom:4px}.pt-game .pt-quest-card .pt-quest-progress>div:first-child>strong{font-size:9px}.pt-game .pt-quest-card-actions{margin-top:8px;gap:3px}.pt-game .pt-quest-card-actions>.pt-button{font-size:10px;min-height:36px;padding:7px}.pt-game .pt-quest-secondary{font-size:8px;min-height:24px;padding:3px}.pt-game .pt-harbor-mood{left:12px;bottom:153px;min-height:49px;max-width:235px;padding:6px 8px;gap:7px;border-radius:12px}.pt-game .pt-harbor-mood>svg:first-child{width:29px;height:29px}.pt-game .pt-harbor-mood strong{font-size:11px;margin-top:1px}.pt-game .pt-harbor-mood small{font-size:7px}.pt-game .pt-life-detail{padding:12px;margin-bottom:15px;border-radius:11px}.pt-game .pt-life-detail-heading{gap:9px}.pt-game .pt-life-detail-heading>span{width:47px;height:49px;border-radius:13px}.pt-game .pt-life-detail-heading>span>svg{width:39px;height:39px}.pt-game .pt-life-detail-heading h3{font-size:17px}.pt-game .pt-life-detail-heading small,.pt-game .pt-life-detail-heading p{font-size:8px}.pt-game .pt-life-reason{font-size:10px;margin-top:10px}.pt-game .pt-life-drivers{grid-template-columns:1fr;gap:6px;margin-top:10px}.pt-game .pt-life-drivers>article{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 9px}.pt-game .pt-life-drivers small{font-size:9px}.pt-game .pt-life-drivers strong{font-size:13px;margin:0;grid-row:1/3;grid-column:2;align-self:center}.pt-game .pt-life-drivers p{font-size:8px;margin:0;grid-column:1}.pt-game .pt-life-foot{flex-direction:column;align-items:flex-start;gap:4px;margin-top:9px}.pt-game .pt-life-foot>p{font-size:8px}.pt-game .pt-life-foot>button{font-size:10px;min-height:30px;padding-left:0}.pt-game .pt-quest-board-heading{gap:12px;margin:19px 0 12px}.pt-game .pt-quest-board-heading h3{font-size:15px}.pt-game .pt-quest-board-heading p{font-size:9px}.pt-game .pt-quest-board-heading>span{font-size:12px}.pt-game .pt-quest-board-heading>span>strong{font-size:25px}.pt-game .pt-quest-board-heading>span>small{font-size:7px}.pt-game .pt-journal-quest{padding:12px;border-radius:11px}.pt-game .pt-journal-quest>header h3{font-size:12px}.pt-game .pt-journal-quest>p,.pt-game .pt-journal-steps>li{font-size:10px}.pt-game .pt-quest-deadline{font-size:7px}.pt-game .pt-journal-quest>footer{flex-wrap:wrap;gap:8px}.pt-game .pt-journal-quest>footer>.pt-button{margin-left:auto}.pt-game .pt-quest-celebration{top:74px;padding:10px;gap:9px;border-radius:13px;max-width:calc(100% - 24px)}.pt-game .pt-celebration-medal{width:39px;height:39px}.pt-game .pt-celebration-medal>svg{width:23px}.pt-game .pt-celebration-medal:before,.pt-game .pt-celebration-medal:after{top:31px;height:14px;width:9px}.pt-game .pt-quest-celebration small{font-size:8px}.pt-game .pt-quest-celebration strong{font-size:12px}.pt-game .pt-quest-celebration p{font-size:9px}.pt-game .pt-quest-celebration>button{width:23px;height:27px}.pt-game .pt-quest-celebration~.pt-toast{bottom:153px}}@media (max-height:680px) and (min-width:561px){.pt-game .pt-quest-card{top:92px;padding:9px 12px 10px;width:280px}.pt-game .pt-quest-guide{width:31px;height:35px}.pt-game .pt-quest-guide>svg{width:31px;height:35px}.pt-game .pt-quest-card>header{margin-bottom:5px}.pt-game .pt-quest-card h2{font-size:13px}.pt-game .pt-quest-card .pt-quest-description{font-size:9px}.pt-game .pt-quest-checklist{margin:6px 0;gap:2px}.pt-game .pt-quest-checklist>li{font-size:9px}.pt-game .pt-quest-card-actions{margin-top:7px}.pt-game .pt-quest-card-actions>.pt-button{min-height:33px;padding:6px;font-size:10px}.pt-game .pt-quest-secondary{min-height:23px;font-size:8px}.pt-game .pt-harbor-mood{min-height:48px;bottom:116px}}@media (prefers-reduced-motion:reduce){.pt-game .pt-quest-celebration{animation:none}.pt-game .pt-quest-progress>div[role=progressbar]>i{transition:none}.pt-game .pt-harbor-mood:hover{transform:none}}@media (max-height:560px) and (min-width:561px){.pt-game{min-height:min(400px,100dvh)}.pt-game .pt-hud{top:10px;left:14px;right:14px}.pt-game .pt-quest-card{display:flex;flex-direction:column;top:82px;left:14px;width:266px;max-height:calc(100% - 174px);padding:8px 10px}.pt-game .pt-quest-card:after{display:none}.pt-game .pt-quest-card-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#7aa89566 transparent;padding:0 3px 2px 0}.pt-game .pt-quest-card-actions{margin-top:5px;gap:1px}.pt-game .pt-quest-card-actions>.pt-button{min-height:33px}.pt-game .pt-quest-secondary{min-height:22px;padding:2px}.pt-game .pt-quest-card>header{margin:0 0 5px;min-height:31px}.pt-game .pt-quest-card>header button{min-height:31px;padding:3px}.pt-game .pt-quest-card>header button>span{display:none}.pt-game .pt-quest-guide{width:29px;height:31px}.pt-game .pt-quest-guide>svg{width:29px;height:31px}.pt-game .pt-harbor-mood{left:auto;right:14px;bottom:98px;min-height:44px;padding:5px 8px}.pt-game .pt-harbor-mood>svg:first-child{width:28px;height:28px}.pt-game .pt-harbor-mood strong{font-size:11px}.pt-game .pt-harbor-mood small{font-size:7px}.pt-game .pt-side-tools{top:81px;right:14px}.pt-game .pt-dock{bottom:14px}.pt-game .pt-map-caption{bottom:2px}.pt-game .pt-sheet{bottom:96px;max-height:calc(100% - 177px)}}.pt-game{--pt-notice-bottom: calc(120px + env(safe-area-inset-bottom,0px)) }.pt-game .pt-quest-card{display:flex;flex-direction:column;max-height:calc(100% - 300px)}.pt-game .pt-quest-card>header,.pt-game .pt-quest-card-heading,.pt-game .pt-quest-card>.pt-quest-progress,.pt-game .pt-quest-card-actions{flex-shrink:0}.pt-game .pt-quest-card-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#87aa8b77 transparent;padding-right:3px}.pt-game .pt-quest-card-body[hidden]{display:none!important}.pt-game .pt-quest-card>.pt-quest-progress{margin-top:8px}.pt-game .pt-quest-checklist>li small{display:block;font-size:9px;color:#80917a;line-height:1.5;margin-top:1px}.pt-game .pt-quest-next-step{font-size:10px;line-height:1.5;color:#6b8171;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pt-game .pt-quest-details-toggle[aria-expanded=true]>svg{transform:rotate(90deg)}.pt-game .pt-quest-details-toggle[aria-expanded=false]>svg{transform:rotate(-90deg)}.pt-game .pt-cash strong,.pt-game .pt-ledger-top strong,.pt-game .pt-result-stats strong{white-space:nowrap}.pt-game .pt-result-stats strong{display:inline-flex;align-items:baseline;justify-content:center;flex-wrap:nowrap;max-width:100%}.pt-game .pt-result-stats strong>small{flex:none;white-space:nowrap}.pt-game .pt-notification-rail{position:absolute;z-index:35;right:24px;bottom:var(--pt-notice-bottom);width:min(420px,calc(100% - 370px));max-height:160px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#aac5a86b transparent;padding:2px 3px 6px;pointer-events:auto}.pt-game .pt-notification-rail>.pt-toast,.pt-game .pt-notification-rail>.pt-quest-celebration{position:relative;z-index:auto;inset:auto;transform:none;width:100%;max-width:100%;margin:0;flex:0 0 auto;animation:ptNoticeRise .2s ease-out;box-shadow:0 3px #164d5240,0 6px 16px #164d6333}.pt-game .pt-notification-rail>.pt-toast{padding:9px 10px;font-size:11px;line-height:1.5}.pt-game .pt-notification-rail>.pt-quest-celebration{padding:10px;gap:9px}.pt-game .pt-notification-rail .pt-quest-celebration strong{font-size:12px;line-height:1.5}.pt-game .pt-notification-rail .pt-quest-celebration p{font-size:9px;line-height:1.5}.pt-game .pt-notification-rail .pt-celebration-medal{width:36px;height:36px}.pt-game .pt-notification-rail .pt-celebration-medal>svg{width:22px;height:22px}.pt-game .pt-notification-rail .pt-celebration-medal:before,.pt-game .pt-notification-rail .pt-celebration-medal:after{top:29px;height:12px;width:9px}.pt-game .pt-notification-rail.is-inline{position:relative;z-index:auto;right:auto;bottom:auto;width:100%;max-height:none;overflow:visible;padding:0;margin:0 0 13px}.pt-game .pt-welcome>.pt-notification-rail.is-inline{margin:13px 0 0}@keyframes ptNoticeRise{0%{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}@media (max-width:560px),(max-height:560px){.pt-game .pt-quest-card.pt-quest-compact{gap:0;padding:9px 10px 10px}.pt-game .pt-quest-compact>header{min-height:31px;margin:0 0 5px;gap:6px}.pt-game .pt-quest-compact .pt-quest-guide{display:none}.pt-game .pt-quest-compact>header>div>strong{display:none}.pt-game .pt-quest-compact>header>div>small{font-size:9px;line-height:1.4}.pt-game .pt-quest-compact>header button{min-width:42px;min-height:32px;font-size:8px;padding:3px 5px;gap:1px}.pt-game .pt-quest-compact>header .pt-quest-details-toggle{flex-direction:row;font-size:9px;gap:2px;min-width:55px}.pt-game .pt-quest-compact>header button>span{display:inline}.pt-game .pt-quest-compact>header button>svg{width:14px;height:14px}.pt-game .pt-quest-compact .pt-quest-heading{margin-bottom:3px;min-height:15px}.pt-game .pt-quest-compact .pt-quest-heading>span,.pt-game .pt-quest-compact .pt-quest-heading>b{font-size:8px}.pt-game .pt-quest-compact h2{font-size:13px;line-height:1.4}.pt-game .pt-quest-compact .pt-quest-next-step{font-size:10px;line-height:1.5;margin-top:3px}.pt-game .pt-quest-compact>.pt-quest-progress{margin-top:6px}.pt-game .pt-quest-compact .pt-quest-progress>div:first-child{font-size:9px;margin-bottom:4px}.pt-game .pt-quest-compact .pt-quest-progress>div:first-child>strong{font-size:10px}.pt-game .pt-quest-compact .pt-quest-card-actions{margin-top:7px;gap:3px}.pt-game .pt-quest-compact .pt-quest-card-actions>.pt-button{min-height:36px;font-size:11px;padding:7px 8px}.pt-game .pt-quest-compact .pt-quest-card-body{padding:0 3px 0 0}.pt-game .pt-quest-compact .pt-quest-description{font-size:11px;line-height:1.65;margin-top:7px}.pt-game .pt-quest-compact .pt-quest-checklist{gap:6px;margin:9px 0}.pt-game .pt-quest-compact .pt-quest-checklist>li{font-size:10px;line-height:1.5}.pt-game .pt-quest-compact .pt-quest-checklist>li small{font-size:9px}.pt-game .pt-quest-compact .pt-quest-secondary{font-size:10px;min-height:28px}}@media (max-width:560px){.pt-game{--pt-notice-bottom: calc(145px + env(safe-area-inset-bottom,0px)) }.pt-game .pt-quest-card.pt-quest-compact{top:81px;width:calc(100% - 80px);max-width:300px;max-height:calc(100% - 290px - env(safe-area-inset-bottom,0px))}.pt-game.pt-has-notification .pt-quest-card.pt-quest-compact{max-height:calc(100% - 390px - env(safe-area-inset-bottom,0px))}.pt-game .pt-notification-rail:not(.is-inline){left:12px;right:12px;width:auto;bottom:var(--pt-notice-bottom);max-height:154px;gap:7px}.pt-game .pt-notification-rail>.pt-toast{font-size:11px;line-height:1.5;max-width:none}.pt-game .pt-notification-rail .pt-toast>button{width:28px;height:29px}.pt-game.pt-has-notification .pt-harbor-mood{visibility:hidden;pointer-events:none}.pt-game .pt-dock{bottom:calc(25px + env(safe-area-inset-bottom,0px))}.pt-game .pt-sheet{bottom:calc(145px + env(safe-area-inset-bottom,0px));max-height:calc(100% - 226px - env(safe-area-inset-bottom,0px))}.pt-game .pt-result-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pt-game .pt-result-stats>.pt-result-cash{grid-column:1/-1;padding:12px 9px}.pt-game .pt-result-cash>span{font-size:10px;margin-bottom:4px}.pt-game .pt-result-cash>strong{font-size:clamp(25px,7vw,32px);letter-spacing:-.6px}.pt-game .pt-result-cash>strong>small{font-size:12px;margin-left:5px}.pt-game .pt-result-cash>em{font-size:9px;margin-top:4px}}@media (max-height:560px) and (min-width:561px){.pt-game{--pt-notice-bottom: calc(95px + env(safe-area-inset-bottom,0px)) }.pt-game .pt-quest-card.pt-quest-compact{top:82px;max-height:calc(100% - 174px);width:266px}.pt-game .pt-notification-rail:not(.is-inline){right:14px;left:auto;width:min(330px,calc(100% - 310px));bottom:var(--pt-notice-bottom);max-height:calc(100% - 185px)}.pt-game.pt-has-notification .pt-harbor-mood{visibility:hidden;pointer-events:none}}@media (max-width:560px) and (max-height:620px){.pt-game.pt-has-notification .pt-quest-card.pt-quest-compact{max-height:210px}.pt-game .pt-notification-rail:not(.is-inline){max-height:80px}}@media (prefers-reduced-motion:reduce){.pt-game .pt-notification-rail>.pt-toast,.pt-game .pt-notification-rail>.pt-quest-celebration{animation:none}}\n';
+var useStyleEffect = typeof window === "undefined" ? useEffect4 : useLayoutEffect;
+function GreenPortStrategy2() {
+  useStyleEffect(() => {
+    const id = "green-port-v14-styles";
+    let s = document.getElementById(id);
+    if (!s) {
+      s = document.createElement("style");
+      s.id = id;
+      document.head.appendChild(s);
+    }
+    if (s.textContent !== css) s.textContent = css;
+  }, []);
+  return React5.createElement(GreenPortStrategy);
+}
+export {
+  DIFFICULTIES,
+  FUELS,
+  MODEL_CONFIG,
+  MODEL_VERSION,
+  RESEARCH_NOTES,
+  SCENARIOS,
+  TRANSITIONS,
+  acceptContract,
+  advanceYear,
+  cancelProject,
+  createGame,
+  GreenPortStrategy2 as default,
+  expandProject,
+  exportGame,
+  getContractOffers,
+  getDashboard,
+  getProjectOptions,
+  importGame,
+  orderProject,
+  previewYear,
+  setPricePolicy
+};
